@@ -2,40 +2,39 @@ import AVFAudio
 import SwiftUI
 import AppKit
 
-enum SettingsCategory: String, CaseIterable, Identifiable {
-    case appearance = "Appearance"
+enum SettingsSidebarTab: String, CaseIterable, Identifiable {
+    case general = "General"
+    case models = "Models"
     case personalization = "Personalization"
-    case thinking = "Thinking & AI"
-    case audio = "Speech"
-    case about = "About"
+    case skills = "Manage Skills"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
-        case .appearance: "paintpalette.fill"
-        case .personalization: "person.crop.circle"
-        case .thinking: "lightbulb.fill"
-        case .audio: "speaker.wave.2.fill"
-        case .about: "info.circle.fill"
+        case .general: "gearshape"
+        case .models: "cube"
+        case .personalization: "person"
+        case .skills: "sparkles"
         }
     }
 }
 
 enum ResponseStylePersonality: String, CaseIterable, Identifiable {
-    case helpful = "Helpful & Balanced"
-    case concise = "Direct & Concise"
-    case creative = "Creative & Expansive"
-    case analytical = "Technical & Analytical"
+    case helpful = "Helpful"
+    case formal = "Formal"
+    case concise = "Concise"
+    case creative = "Creative"
+    case humorous = "Humorous"
 
     var id: String { rawValue }
 }
 
 enum ResponseTone: String, CaseIterable, Identifiable {
-    case natural = "Natural & Warm"
-    case professional = "Professional"
-    case casual = "Casual & Friendly"
-    case academic = "Academic & Rigorous"
+    case natural = "Natural"
+    case academic = "Academic"
+    case empathetic = "Empathetic"
+    case playful = "Playful"
 
     var id: String { rawValue }
 }
@@ -43,14 +42,21 @@ enum ResponseTone: String, CaseIterable, Identifiable {
 enum ResponseLengthPreference: String, CaseIterable, Identifiable {
     case concise = "Concise"
     case balanced = "Balanced"
-    case detailed = "Detailed"
+    case thorough = "Thorough"
 
     var id: String { rawValue }
 }
 
 struct SettingsView: View {
     var onClose: (() -> Void)? = nil
-    @State private var selectedCategory: SettingsCategory = .appearance
+
+    @State private var selectedTab: SettingsSidebarTab = .general
+
+    // General Settings
+    @AppStorage("notifyOnFinish") private var notifyOnFinish: Bool = true
+    @AppStorage("experienceLevel") private var experienceLevel: String = ExperienceLevel.beginner.rawValue
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = true
+    @State private var showDeleteHistoryAlert: Bool = false
 
     // Gradient Customization
     @AppStorage("chatGradientTheme") private var gradientPresetRaw: String = GradientPreset.aurora.rawValue
@@ -68,15 +74,12 @@ struct SettingsView: View {
     @AppStorage("enableRichMarkdown") private var enableRichMarkdown: Bool = true
     @AppStorage("enableCrossSessionMemory") private var enableCrossSessionMemory: Bool = true
 
-    // General & Device
-    @AppStorage("experienceLevel") private var experienceLevel: String = ExperienceLevel.beginner.rawValue
-    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    // Models & Storage
     @AppStorage("defaultContextLength") private var defaultContextLength: Int = 4096
-    @AppStorage("autoReadAloud") private var autoReadAloud: Bool = false
-    @AppStorage("ttsVoiceIdentifier") private var ttsVoiceIdentifier: String = ""
+    @State private var downloadedModels: [LocalDiskModel] = []
+    @State private var isScanningLocal: Bool = false
+    @State private var showingImportSheet: Bool = false
 
-    @State private var availableVoices: [AVSpeechSynthesisVoice] = []
-    @State private var showingImportSheet = false
     @State private var customTopColor: Color = Color(hex: GradientTheme.defaultTopHex) ?? .green
     @State private var customBottomColor: Color = Color(hex: GradientTheme.defaultBottomHex) ?? .black
 
@@ -88,134 +91,387 @@ struct SettingsView: View {
         )
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            // Category Navigation Bar
-            HStack(spacing: 8) {
-                if let onClose {
-                    Button {
-                        onClose()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("Chat")
-                        }
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 8)
-                }
+    private var totalLocalSizeFormatted: String {
+        let total = downloadedModels.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+    }
 
-                ForEach(SettingsCategory.allCases) { category in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            selectedCategory = category
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left Sidebar (Exact Screenshot 4 Parity)
+            VStack(alignment: .leading, spacing: 6) {
+                // Top header with Back to Chat and Traffic Lights spacing
+                HStack(spacing: 8) {
+                    if let onClose {
+                        Button {
+                            onClose()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                Text("Chat")
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
                         }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 8)
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+                // Sidebar Tabs List
+                ForEach(SettingsSidebarTab.allCases) { tab in
+                    Button {
+                        selectedTab = tab
                     } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: category.icon)
-                                .font(.system(size: 12))
-                            Text(category.rawValue)
-                                .font(.system(size: 13, weight: selectedCategory == category ? .semibold : .regular))
+                        HStack(spacing: 10) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 15))
+                                .frame(width: 22)
+                            Text(tab.rawValue)
+                                .font(.system(size: 14, weight: selectedTab == tab ? .semibold : .regular))
+                            Spacer()
                         }
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(selectedCategory == category ? .white : .primary)
+                        .padding(.vertical, 8)
+                        .foregroundStyle(selectedTab == tab ? .white : .primary)
                         .background(
-                            selectedCategory == category
-                                ? Color.accentColor
-                                : Color.clear,
-                            in: .capsule
+                            selectedTab == tab ? Color.accentColor : Color.clear,
+                            in: .rect(cornerRadius: 8)
                         )
                     }
                     .buttonStyle(.plain)
                 }
+
                 Spacer()
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 18)
-            .padding(.bottom, 14)
+            .frame(width: 210)
+            .padding(.horizontal, 8)
+            .background(Color(hex: "13171D") ?? .black)
 
             Divider()
 
-            // Main Content Area for Selected Category
+            // Right Detail Area (Exact Screenshot 4 Parity)
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    switch selectedCategory {
-                    case .appearance:
-                        appearanceCategoryView
+                VStack(alignment: .leading, spacing: 22) {
+                    switch selectedTab {
+                    case .general:
+                        generalDetailView
+                    case .models:
+                        modelsDetailView
                     case .personalization:
-                        personalizationCategoryView
-                    case .thinking:
-                        thinkingCategoryView
-                    case .audio:
-                        audioCategoryView
-                    case .about:
-                        aboutCategoryView
+                        personalizationDetailView
+                    case .skills:
+                        ManageSkillsView()
                     }
                 }
-                .padding(24)
-                .frame(maxWidth: 720, alignment: .leading)
+                .padding(28)
+                .frame(maxWidth: 680, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(hex: "1A202C") ?? .black)
         }
-        .frame(minWidth: 580, minHeight: 460)
+        .frame(minWidth: 700, minHeight: 520)
         .onAppear {
-            availableVoices = AVSpeechSynthesisVoice.speechVoices()
-                .filter { $0.language.starts(with: "en") }
             if let c1 = Color(hex: customTopHex) { customTopColor = c1 }
             if let c2 = Color(hex: customBottomHex) { customBottomColor = c2 }
+            Task { await scanLocalDownloads() }
         }
         .sheet(isPresented: $showingImportSheet) {
             ImportFromProvidersView()
         }
+        .alert("Clear All Conversation History?", isPresented: $showDeleteHistoryAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete All", role: .destructive) {
+                // History clear action
+            }
+        } message: {
+            Text("This will permanently delete all messages and conversations on this Mac.")
+        }
     }
 
-    // MARK: - Category 1: Appearance
+    // MARK: - Detail 1: General (Exact Screenshot 4 Parity)
 
-    private var appearanceCategoryView: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Chat Appearance")
-                    .font(.title2)
-                    .bold()
-                Text("Customize the real-time background gradient of the Chat window.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+    private var generalDetailView: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("General")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(.white)
+
+            // App Card
+            VStack(alignment: .leading, spacing: 14) {
+                Text("App")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+
+                VStack(spacing: 0) {
+                    HStack {
+                        Image(systemName: "bell")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24)
+                        Text("Notify when model finishes responding")
+                            .font(.system(size: 13))
+                        Spacer()
+                        Toggle("", isOn: $notifyOnFinish)
+                            .labelsHidden()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+
+                    Divider()
+
+                    HStack {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24)
+                        Text("Delete conversation history")
+                            .font(.system(size: 13))
+                        Spacer()
+                        Button("Delete...") {
+                            showDeleteHistoryAlert = true
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .font(.system(size: 13, weight: .medium))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+                .liquidGlass(.rect(cornerRadius: 12))
             }
 
-            // Live Preview Card
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Background Preview")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            // About Card
+            VStack(alignment: .leading, spacing: 14) {
+                Text("About")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
 
-                RoundedRectangle(cornerRadius: 14)
+                VStack(spacing: 0) {
+                    settingsNavigationRow(icon: "doc.text", title: "Terms & Conditions")
+                    Divider()
+                    settingsNavigationRow(icon: "lock", title: "Privacy Policy")
+                    Divider()
+                    settingsNavigationRow(icon: "doc.plaintext", title: "Licenses")
+                    Divider()
+                    HStack {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24)
+                        Text("Version 2.0 (Build 2026)")
+                            .font(.system(size: 13))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+                .liquidGlass(.rect(cornerRadius: 12))
+            }
+
+            // More Card
+            VStack(alignment: .leading, spacing: 14) {
+                Text("More")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+
+                VStack(spacing: 0) {
+                    HStack {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24)
+                        Text("Share the app (support us 🚀)")
+                            .font(.system(size: 13))
+                        Spacer()
+                        Button("Share...") {
+                            let picker = NSSharingServicePicker(items: ["Locally: Private on-device AI for macOS"])
+                            if let window = NSApp.keyWindow {
+                                picker.show(relativeTo: .zero, of: window.contentView ?? NSView(), preferredEdge: .minY)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+
+                    Divider()
+
+                    HStack {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24)
+                        Text("Follow us on X")
+                            .font(.system(size: 13))
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+                .liquidGlass(.rect(cornerRadius: 12))
+            }
+
+            // Footer
+            HStack {
+                Spacer()
+                Text("Made with 💜 for on-device intelligence")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    private func settingsNavigationRow(icon: String, title: String) -> some View {
+        HStack {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+            Text(title)
+                .font(.system(size: 13))
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: - Detail 2: Models
+
+    private var modelsDetailView: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Models & Storage")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(.white)
+
+            // Storage Summary Card
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Storage Usage")
+                    .font(.headline)
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Total Downloaded Space")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(totalLocalSizeFormatted)
+                            .font(.title3)
+                            .bold()
+                    }
+                    Spacer()
+                    Text("\(downloadedModels.count) models on disk")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Divider()
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("HuggingFace Hub Cache")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("~/.cache/huggingface/hub")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    Button("Refresh") {
+                        Task { await scanLocalDownloads() }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .padding(16)
+            .liquidGlass(.rect(cornerRadius: 14))
+
+            // Downloaded Models List
+            if !downloadedModels.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Downloaded Files")
+                        .font(.headline)
+
+                    VStack(spacing: 0) {
+                        ForEach(downloadedModels) { model in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(model.displayName)
+                                        .font(.system(size: 13, weight: .semibold))
+                                    Text(model.sizeFormatted)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Delete", role: .destructive) {
+                                    try? FileManager.default.removeItem(at: model.url)
+                                    downloadedModels.removeAll { $0.id == model.id }
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+
+                            if model.id != downloadedModels.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                    .liquidGlass(.rect(cornerRadius: 12))
+                }
+            }
+        }
+    }
+
+    // MARK: - Detail 3: Personalization
+
+    private var personalizationDetailView: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Personalization")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(.white)
+
+            // Live Gradient Preview Card
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Chat Background Gradient")
+                    .font(.headline)
+
+                RoundedRectangle(cornerRadius: 12)
                     .fill(LinearGradient(colors: activeColors, startPoint: .top, endPoint: .bottom))
-                    .frame(height: 100)
+                    .frame(height: 80)
                     .overlay(
                         HStack {
-                            VStack(alignment: .leading, spacing: 4) {
+                            VStack(alignment: .leading, spacing: 2) {
                                 Text("Meet the new Apple Foundation")
-                                    .font(.system(size: 14, weight: .bold))
+                                    .font(.system(size: 13, weight: .bold))
                                     .foregroundStyle(.white)
-                                Text("Locally AI • Active Theme")
-                                    .font(.system(size: 11))
+                                Text("Active Gradient Theme")
+                                    .font(.system(size: 10))
                                     .foregroundStyle(.white.opacity(0.8))
                             }
                             Spacer()
                             Image(systemName: "apple.intelligence")
-                                .font(.system(size: 26))
+                                .font(.system(size: 24))
                                 .foregroundStyle(.white.opacity(0.9))
                         }
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, 16)
                     )
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.12), lineWidth: 1))
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Theme Presets")
-                    .font(.headline)
 
                 Picker("Preset", selection: $gradientPresetRaw) {
                     ForEach(GradientPreset.allCases) { preset in
@@ -223,54 +479,35 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: 260)
+                .frame(maxWidth: 240)
 
                 if gradientPresetRaw == GradientPreset.custom.rawValue {
-                    HStack(spacing: 24) {
+                    HStack(spacing: 20) {
                         ColorPicker("Top Color", selection: $customTopColor)
                             .onChange(of: customTopColor) { _, newColor in
                                 customTopHex = newColor.toHex()
                             }
-
                         ColorPicker("Bottom Color", selection: $customBottomColor)
                             .onChange(of: customBottomColor) { _, newColor in
                                 customBottomHex = newColor.toHex()
                             }
                     }
-                    .padding(.vertical, 6)
                 }
             }
             .padding(16)
-            .liquidGlass(.rect(cornerRadius: 14), isClear: true)
-        }
-    }
-
-    // MARK: - Category 2: Personalization
-
-    private var personalizationCategoryView: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Personalization")
-                    .font(.title2)
-                    .bold()
-                Text("Shape how your on-device AI communicates, behaves, and reasons.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
+            .liquidGlass(.rect(cornerRadius: 14))
 
             // System Prompt Card
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text("Custom System Prompt")
                         .font(.headline)
                     Spacer()
                     if !customSystemPrompt.isEmpty {
-                        Button("Clear") {
-                            customSystemPrompt = ""
-                        }
-                        .buttonStyle(.plain)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Button("Clear") { customSystemPrompt = "" }
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -281,84 +518,98 @@ struct SettingsView: View {
                     .background(Color(.controlBackgroundColor))
                     .clipShape(.rect(cornerRadius: 8))
 
-                if !importedPersonaSummary.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                        Text(importedPersonaSummary)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
                 // Quick Presets
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Quick Presets:")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        promptPresetButton(
-                            title: "Helpful & Direct",
-                            prompt: "You are a concise, highly capable AI assistant. Provide direct answers with clarity, precision, and no filler."
-                        )
-                        promptPresetButton(
-                            title: "Senior Engineer",
-                            prompt: "You are a senior software architect. Provide production-grade, idiomatic code, explain edge cases, and follow best design patterns."
-                        )
-                        promptPresetButton(
-                            title: "Deep Thinker",
-                            prompt: "You are an analytical philosopher and researcher. Think step-by-step, explore nuances, evaluate tradeoffs, and reason rigorously."
-                        )
-                    }
+                HStack(spacing: 8) {
+                    promptPresetButton(title: "Helpful & Direct", prompt: "You are a concise, highly capable AI assistant.")
+                    promptPresetButton(title: "Senior Engineer", prompt: "You are a senior software architect providing production-grade code.")
+                    promptPresetButton(title: "Deep Thinker", prompt: "You are an analytical researcher. Think step-by-step and reason rigorously.")
                 }
             }
             .padding(16)
-            .liquidGlass(.rect(cornerRadius: 14), isClear: true)
+            .liquidGlass(.rect(cornerRadius: 14))
 
-            // Personality Pickers Card
+            // Personality & Tone Card
             VStack(alignment: .leading, spacing: 14) {
-                Text("Voice & Tone Preferences")
+                Text("Persona & Tone")
                     .font(.headline)
 
-                Picker("Personality Style", selection: $personalityStyle) {
-                    ForEach(ResponseStylePersonality.allCases) { item in
-                        Text(item.rawValue).tag(item.rawValue)
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                    GridRow {
+                        Text("Style")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Picker("Style", selection: $personalityStyle) {
+                            ForEach(ResponseStylePersonality.allCases) { style in
+                                Text(style.rawValue).tag(style.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+
+                    GridRow {
+                        Text("Tone")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Picker("Tone", selection: $responseTone) {
+                            ForEach(ResponseTone.allCases) { tone in
+                                Text(tone.rawValue).tag(tone.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+
+                    GridRow {
+                        Text("Length")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Picker("Length", selection: $responseLength) {
+                            ForEach(ResponseLengthPreference.allCases) { length in
+                                Text(length.rawValue).tag(length.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
                     }
                 }
 
-                Picker("Tone", selection: $responseTone) {
-                    ForEach(ResponseTone.allCases) { item in
-                        Text(item.rawValue).tag(item.rawValue)
-                    }
-                }
+                Divider()
 
-                Picker("Response Length", selection: $responseLength) {
-                    ForEach(ResponseLengthPreference.allCases) { item in
-                        Text(item.rawValue).tag(item.rawValue)
-                    }
-                }
+                Toggle("Rich Markdown Output", isOn: $enableRichMarkdown)
+                Toggle("Remember across conversations", isOn: $enableCrossSessionMemory)
             }
             .padding(16)
-            .liquidGlass(.rect(cornerRadius: 14), isClear: true)
+            .liquidGlass(.rect(cornerRadius: 14))
 
-            // Import From Providers Launcher Card
-            HStack(spacing: 14) {
+            // Thinking Mode Card
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Thinking Mode (Chain-of-Thought)", isOn: $enableThinkingMode)
+                    .font(.headline)
+
+                Picker("Reasoning Effort", selection: $thinkingBudget) {
+                    Text("Low").tag("low")
+                    Text("Medium").tag("medium")
+                    Text("High").tag("high")
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding(16)
+            .liquidGlass(.rect(cornerRadius: 14))
+
+            // Import Persona Launcher
+            HStack(spacing: 12) {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.title2)
                     .foregroundStyle(.blue)
-
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Import Persona From Other AIs")
                         .font(.headline)
-                    Text("Transfer preferences from ChatGPT, Claude, or Gemini into Locally.")
+                    Text("Extract what ChatGPT, Claude, or Gemini knows about you.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-
                 Spacer()
-
                 Button("Open Importer") {
                     showingImportSheet = true
                 }
@@ -366,164 +617,9 @@ struct SettingsView: View {
                 .controlSize(.small)
             }
             .padding(16)
-            .liquidGlass(.rect(cornerRadius: 14), isClear: true)
+            .liquidGlass(.rect(cornerRadius: 14))
         }
     }
-
-    // MARK: - Category 3: Thinking & AI
-
-    private var thinkingCategoryView: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Thinking & Reasoning")
-                    .font(.title2)
-                    .bold()
-                Text("Adjust how deeply your on-device models analyze queries before answering.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 16) {
-                Toggle("Enable Thinking Mode (Chain-of-Thought)", isOn: $enableThinkingMode)
-                    .font(.headline)
-
-                Text("When active, models construct reasoning steps and evaluate alternatives before composing their final response.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Reasoning Effort")
-                        .font(.subheadline)
-                        .bold()
-
-                    Picker("Effort", selection: $thinkingBudget) {
-                        Text("Low (Quick Analysis)").tag("low")
-                        Text("Medium (Balanced)").tag("medium")
-                        Text("High (Deep Rigorous Reasoning)").tag("high")
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Default Context Window")
-                            .font(.subheadline)
-                            .bold()
-                        Spacer()
-                        Text("\(defaultContextLength) tokens")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Picker("Context Window", selection: $defaultContextLength) {
-                        Text("2,048 tokens").tag(2048)
-                        Text("4,096 tokens").tag(4096)
-                        Text("8,192 tokens").tag(8192)
-                        Text("16,384 tokens").tag(16384)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                Divider()
-
-                Toggle("Rich Markdown & Syntax Highlighting", isOn: $enableRichMarkdown)
-                Toggle("Cross-Session Context & Memory", isOn: $enableCrossSessionMemory)
-            }
-            .padding(16)
-            .liquidGlass(.rect(cornerRadius: 14), isClear: true)
-        }
-    }
-
-    // MARK: - Category 4: Speech & Audio
-
-    private var audioCategoryView: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Speech & Audio")
-                    .font(.title2)
-                    .bold()
-                Text("Configure text-to-speech voice readout and playback preferences.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 14) {
-                Toggle("Automatically Read Aloud Assistant Responses", isOn: $autoReadAloud)
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Preferred System Voice")
-                        .font(.subheadline)
-                        .bold()
-
-                    Picker("Voice", selection: $ttsVoiceIdentifier) {
-                        Text("Default System Voice").tag("")
-                        ForEach(availableVoices, id: \.identifier) { voice in
-                            Text("\(voice.name) (\(voice.language))").tag(voice.identifier)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                }
-            }
-            .padding(16)
-            .liquidGlass(.rect(cornerRadius: 14), isClear: true)
-        }
-    }
-
-    // MARK: - Category 5: About Locally
-
-    private var aboutCategoryView: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("About Locally")
-                    .font(.title2)
-                    .bold()
-                Text("Private, on-device AI powered by Apple Silicon.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(spacing: 16) {
-                Image(systemName: "apple.intelligence")
-                    .font(.system(size: 44))
-                    .foregroundStyle(.white)
-                    .frame(width: 80, height: 80)
-                    .liquidGlass(.circle)
-
-                VStack(spacing: 4) {
-                    Text("Locally")
-                        .font(.title3)
-                        .bold()
-                    Text("Version 2.0 • Build 2026")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Locally executes open-source LLMs and VLMs entirely on your Mac's Neural Engine and Unified Memory with MLX. Zero server telemetry, zero external data leaks.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-
-                Divider()
-
-                Button("Reset Onboarding Flow", role: .destructive) {
-                    hasCompletedOnboarding = false
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity)
-            .liquidGlass(.rect(cornerRadius: 16), isClear: true)
-        }
-    }
-
-    // MARK: - Helpers
 
     private func promptPresetButton(title: String, prompt: String) -> some View {
         Button {
@@ -531,11 +627,42 @@ struct SettingsView: View {
         } label: {
             Text(title)
                 .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
                 .background(Color.secondary.opacity(0.15))
                 .clipShape(.capsule)
         }
         .buttonStyle(.plain)
+    }
+
+    private func scanLocalDownloads() async {
+        isScanningLocal = true
+        let fm = FileManager.default
+        let hubDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".cache/huggingface/hub")
+        guard fm.fileExists(atPath: hubDir.path) else {
+            downloadedModels = []
+            isScanningLocal = false
+            return
+        }
+
+        let list = await Task.detached(priority: .userInitiated) { () -> [LocalDiskModel] in
+            guard let contents = try? fm.contentsOfDirectory(at: hubDir, includingPropertiesForKeys: [.isDirectoryKey]) else {
+                return []
+            }
+            var result: [LocalDiskModel] = []
+            for modelDir in contents where modelDir.lastPathComponent.hasPrefix("models--") {
+                let rawName = modelDir.lastPathComponent.replacingOccurrences(of: "models--", with: "")
+                let parts = rawName.split(separator: "--")
+                let author = parts.first.map(String.init) ?? "Local"
+                let modelName = parts.dropFirst().joined(separator: "-")
+                let modelId = "\(author)/\(modelName)"
+                let size = DownloadsView.calculateDirSize(at: modelDir, fm: fm)
+                result.append(LocalDiskModel(id: modelId, displayName: modelName, author: author, sizeBytes: size, url: modelDir))
+            }
+            return result.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        }.value
+
+        downloadedModels = list
+        isScanningLocal = false
     }
 }

@@ -13,7 +13,7 @@ struct DownloadsView: View {
     @State private var showDeleteAllConfirmation = false
 
     enum DownloadsViewTab: String, CaseIterable, Identifiable {
-        case browse = "Browse by Provider"
+        case browse = "Featured Models"
         case local = "Downloaded on Mac"
         var id: String { rawValue }
     }
@@ -60,12 +60,13 @@ struct DownloadsView: View {
 
             switch selectedTab {
             case .browse:
-                browseView
+                ModelsOverviewView(chatViewModel: chatViewModel)
             case .local:
                 localDownloadsView
             }
         }
-        .navigationTitle("Downloads")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(hex: "13171D") ?? .black)
         .task {
             if downloadsManager.allModels.isEmpty {
                 await downloadsManager.fetchModelsFromHF()
@@ -351,7 +352,7 @@ struct DownloadsView: View {
         isScanningLocal = false
     }
 
-    private nonisolated static func calculateDirSize(at url: URL, fm: FileManager) -> Int64 {
+    nonisolated static func calculateDirSize(at url: URL, fm: FileManager) -> Int64 {
         guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else {
             return 0
         }
