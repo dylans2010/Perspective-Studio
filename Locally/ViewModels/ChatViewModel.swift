@@ -455,6 +455,7 @@ final class ChatViewModel {
                 let effectiveSystemPrompt = ModelContextBuilder.build(
                     ModelContextBuilder.Input(
                         isAgentMode: false,
+                        capability: ModelCapabilityProfile.profile(forModelID: selectedModelID, isVisual: selectedModelIsVisual),
                         intent: intent,
                         indexDirectory: ContextIndexManager.directoryText(
                             mode: .chat,
@@ -544,6 +545,16 @@ final class ChatViewModel {
                     knownToolIDs: ToolsRegistry.shared.allToolIDs
                 )
 
+                // An empty or fully-sanitized-away completion is a
+                // failure, stated as one — never an empty bubble, and
+                // never a fallback that substitutes instructions or
+                // internal text for the missing answer. (A user
+                // cancellation keeps its partial/empty state silent,
+                // handled by the run gate at the end of this task.)
+                if assistantMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !Task.isCancelled {
+                    assistantMessage.content = "I didn't get a response from the model for that message. Nothing was executed. Try sending it again, or switch to a different model."
+                }
+
                 // Auto-read only if the setting is enabled — and read the
                 // answer, not the model's <thinking> reasoning.
                 if UserDefaults.standard.bool(forKey: "autoReadAloud") {
@@ -604,6 +615,7 @@ final class ChatViewModel {
         let agentContextPrompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
                 isAgentMode: true,
+                capability: ModelCapabilityProfile.profile(forModelID: selectedModelID, isVisual: selectedModelIsVisual),
                 intent: agentIntent,
                 indexDirectory: "",
                 retrievedContext: ContextIndexManager.retrievedBundle(
@@ -731,7 +743,13 @@ final class ChatViewModel {
         if !sanitizedAnswer.isEmpty {
             assistantMessage.content = thinkingPrefix + sanitizedAnswer
         } else if assistantMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            assistantMessage.content = thinkingPrefix + sanitizedAnswer
+            // Explicit empty-output failure, like the Chat path: a run
+            // that produced no answer text must say so (with the run's
+            // own error when it has one) instead of leaving an empty
+            // bubble or implying unfinished work succeeded. Completed
+            // tool steps remain visible in the run's tool records.
+            let failure = outcome.error ?? "This run finished without producing an answer. Completed tool steps are shown in the tool cards; anything not shown there did not run."
+            assistantMessage.content = thinkingPrefix + failure
         }
 
         // Per-project memory: every run in a project leaves a session note

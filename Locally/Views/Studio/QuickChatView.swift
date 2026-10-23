@@ -136,6 +136,7 @@ struct QuickChatView: View {
         let systemPrompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
                 isAgentMode: false,
+                capability: ModelCapabilityProfile.profile(forModelID: model.id, isVisual: model.isVisual),
                 intent: quickIntent,
                 indexDirectory: ContextIndexManager.directoryText(
                     mode: .chat,
@@ -174,6 +175,13 @@ struct QuickChatView: View {
                 }
             }
             if activeRunID == runID {
+                // Empty completion = explicit failure, never a blank
+                // result area that looks like success.
+                if !Task.isCancelled, errorText == nil,
+                   ThinkingContentParser.visibleContent(of: response).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    errorText = "The model produced no response for that message. Nothing was executed — try again or pick a different model."
+                    response = ""
+                }
                 activeRunID = nil
                 isRunning = false
             }

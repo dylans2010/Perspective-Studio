@@ -140,13 +140,20 @@ final class ModelContextBuilderTests: XCTestCase {
         )
         XCTAssertTrue(chat.contains("truncated to this mode's token budget"))
         // 10k+ characters went in; the prompt must stay near the 600-token
-        // Chat cap (2,400 chars) plus the fixed identity/secrecy sections.
-        XCTAssertLessThan(chat.count, 600 * 4 + 1_600)
+        // Chat cap (2,400 chars) plus the fixed core sections (identity
+        // line + identity core, conversation-first core, precedence note,
+        // tool-secrecy rule ≈ 2,600 chars with separators). The slack was
+        // 1,600 before the always-on identity core existed — that figure
+        // was already below the pre-existing fixed sections' true size,
+        // so it is corrected here rather than weakening the truncation
+        // assertion itself, which is unchanged in spirit: the bundle is
+        // cut to the cap, and the total is the cap plus the fixed cores.
+        XCTAssertLessThan(chat.count, 600 * 4 + 2_800)
 
         let agent = ModelContextBuilder.build(
             ModelContextBuilder.Input(isAgentMode: true, retrievedContext: oversized)
         )
         XCTAssertTrue(agent.contains("truncated to this mode's token budget"))
-        XCTAssertLessThan(agent.count, 1_600 * 4 + 1_600)
+        XCTAssertLessThan(agent.count, 1_600 * 4 + 2_800)
     }
 }
