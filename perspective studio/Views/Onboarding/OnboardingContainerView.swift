@@ -57,7 +57,7 @@ struct OnboardingContainerView: View {
                         onComplete()
                     }
                     .buttonStyle(.borderedProminent)
-                    .accessibilityLabel("Finish setup and start using Perspective Studio")
+                    .accessibilityLabel("Finish setup and start using Locally")
                 } else if viewModel.currentStep == .welcome {
                     Button("Let's Go") {
                         if reduceMotion {

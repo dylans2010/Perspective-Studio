@@ -2,12 +2,12 @@ import SwiftUI
 import SwiftData
 
 @main
-struct perspective_studioApp: App {
-    @State private var selectedTab: SidebarTab = .discover
+struct LocallyApp: App {
+    @State private var selectedTab: SidebarTab = .chat
     @State private var chatViewModel = ChatViewModel()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Locally") {
             ContentView(selectedTab: $selectedTab, chatViewModel: chatViewModel)
         }
         .modelContainer(for: [UserProfile.self, Conversation.self, Message.self])
@@ -22,7 +22,6 @@ struct perspective_studioApp: App {
             CommandGroup(after: .newItem) {
                 Button("New Chat") {
                     selectedTab = .chat
-                    // Create conversation is deferred to MainView via onChange
                 }
                 .keyboardShortcut("n", modifiers: .command)
 

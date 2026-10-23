@@ -1,27 +1,27 @@
-# Perspective Studio
+# Locally
 
-Your LLM playground on Apple devices.
+Your private AI playground on Apple devices.
 
-Perspective Studio is a free, open-source macOS app for running open-source AI models locally on your Mac. No cloud. No API keys. No subscriptions. Just you and the model, running on Apple Silicon.
+Locally is a free, open-source macOS app for running open-source AI models locally on your Mac. No cloud. No API keys. No subscriptions. Just you and the model, running on Apple Silicon.
 
 Built with SwiftUI and [MLX Swift](https://github.com/ml-explore/mlx-swift-lm) by [Techopolis](https://github.com/Techopolis).
 
 ## Features
 
-- Browse thousands of models from mlx-community on Hugging Face
-- Download any model directly to your Mac with progress tracking
-- Chat with models entirely on-device using MLX Swift
-- See which models fit comfortably in your Mac's memory
-- Text-to-speech playground with MLX Audio and VibeVoice
-- Automatic conversation summarization to stay within context limits
-- Beginner-friendly mode that hides technical jargon
-- Fully accessible with VoiceOver and keyboard navigation
+- **Stunning Custom UI**: Sleek full-bleed gradient chat interface with custom theme presets and dual-tone color pickers.
+- **Provider-Grouped Downloads**: Browse and download models directly from Hugging Face organized by provider (Qwen, Gemma, Mistral, DeepSeek, Llama, Microsoft Phi, Apple).
+- **Capability Badges**: Real-time identification of Tools (Function Calling), Vision (VLMs), Thinking (Reasoning / CoT), Code, and Chat specializations.
+- **Personalization**: Custom system prompts with built-in role presets, personality style pickers, response length options, and step-by-step thinking toggles.
+- **Import From Providers**: Transfer what ChatGPT, Claude, or Gemini knows about you into Locally with a single prompt extraction workflow.
+- **Apple Silicon Native**: Runs 100% on-device using MLX Swift.
+- **Full Privacy**: Your data, documents, and conversations never leave your device.
+- **VoiceOver & Accessibility**: Keyboard shortcuts and full VoiceOver accessibility.
 
 ## Requirements
 
-- macOS 26 or later
+- macOS 15 or later
 - Apple Silicon Mac (M1 or later)
-- Xcode 26 (to build from source)
+- Xcode 16+ (to build from source)
 
 ## Getting Started
 
@@ -31,7 +31,7 @@ Built with SwiftUI and [MLX Swift](https://github.com/ml-explore/mlx-swift-lm) b
    ```
 2. Open `perspective studio.xcodeproj` in Xcode
 3. Build and run (Cmd+R)
-4. Pick a model from the Discover tab and start chatting
+4. Pick a model from the Downloads tab or use an installed model to start chatting
 
 ## Built With
 
@@ -42,20 +42,8 @@ Built with SwiftUI and [MLX Swift](https://github.com/ml-explore/mlx-swift-lm) b
 
 ## Accessibility
 
-Perspective Studio is fully accessible. VoiceOver, keyboard navigation, and screen reader support are built in from day one. If you find an accessibility issue, please report it using our [accessibility issue template](https://github.com/Techopolis/Perspective-Studio/issues/new?template=accessibility.yml).
-
-## Contributing
-
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-All UI contributions must be tested with VoiceOver. This is not optional.
+Locally is fully accessible. VoiceOver, keyboard navigation, and screen reader support are built in from day one.
 
 ## License
 
 MIT. See [LICENSE](LICENSE) for details.
-
-## Related Projects
-
-- [Perspective Server](https://github.com/Techopolis/Perspective-Server)
-- [Perspective CLI](https://github.com/Techopolis/PerspectiveCLI)
-- [Perspective Web](https://github.com/Techopolis/perspective-intelligence-web-community)

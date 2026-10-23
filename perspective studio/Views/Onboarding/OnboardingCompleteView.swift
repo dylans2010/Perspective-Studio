@@ -30,7 +30,7 @@ struct OnboardingCompleteView: View {
 
     private var beginnerNextSteps: some View {
         VStack(alignment: .leading, spacing: 16) {
-            nextStepRow(number: 1, text: "Pick a model from the Discover page")
+            nextStepRow(number: 1, text: "Pick or download a model from Downloads")
             nextStepRow(number: 2, text: "Wait for it to download")
             nextStepRow(number: 3, text: "Start chatting!")
         }

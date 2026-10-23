@@ -3,21 +3,21 @@ import SwiftUI
 struct WelcomeStepView: View {
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 60))
+            Image(systemName: "apple.intelligence")
+                .font(.system(size: 64))
                 .foregroundStyle(
-                    LinearGradient(colors: [.blue, .purple],
+                    LinearGradient(colors: [.green, .blue, .purple],
                                    startPoint: .topLeading,
                                    endPoint: .bottomTrailing)
                 )
                 .accessibilityHidden(true)
 
-            Text("Welcome to Perspective Studio")
+            Text("Welcome to Locally")
                 .font(.largeTitle)
                 .bold()
                 .multilineTextAlignment(.center)
 
-            Text("Your private AI playground")
+            Text("Your private AI playground on Apple Silicon")
                 .font(.title3)
                 .foregroundStyle(.secondary)
 

@@ -1,6 +1,6 @@
-# Contributing to Perspective Studio
+# Contributing to Locally
 
-Thank you for your interest in contributing to Perspective Studio. This project is built to make running open-source AI models approachable for everyone, and contributions that support that mission are welcome.
+Thank you for your interest in contributing to Locally. This project is built to make running open-source AI models approachable for everyone, and contributions that support that mission are welcome.
 
 ## Getting Started
 
