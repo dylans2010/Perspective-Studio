@@ -385,7 +385,7 @@ public final class AntigravityAgentHarness {
             if let additionalSystemPrompt, !additionalSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return additionalSystemPrompt
             }
-            return ModelContextBuilder.build(ModelContextBuilder.Input(isAgentMode: true, intent: intent))
+            return ModelContextBuilder.build(ModelContextBuilder.Input(isAgentMode: true, capability: ModelCapabilityProfile.profile(forModelID: targetModelID), intent: intent))
         }()
 
         /// One direct generation. Returns the cleaned answer, its

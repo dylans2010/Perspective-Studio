@@ -174,21 +174,26 @@ enum FoundationModelAgentRunner {
             toolEventsContinuation.yield(event)
         }
 
-        // Conversational turns get NO tools at all: a session with an
-        // empty tool set can only converse, which is the point — the
-        // old path offered the retrieval tools for "hello" too, and
-        // the model used them and recited what it retrieved.
+        // Conversational AND direct turns get NO tools at all: a session
+        // with an empty tool set can only answer, which is the point —
+        // the old path offered the retrieval tools for "hello" too, and
+        // the model used them and recited what it retrieved. Direct
+        // turns (questions like "what is your name", "Explain what a
+        // SwiftUI Picker does") are questions, not tasks: offering
+        // tools for them invited the same recitation and, for identity
+        // questions, file/memory inspections the user never asked for.
+        // Only `.task` turns are offered tools.
         let intent = ConversationRouter.intent(for: prompt)
-        let runToolIDs = intent == .conversational
-            ? []
-            : Self.runToolIDs(query: prompt, projectID: projectID, computerUseEnabled: ComputerUseSettings.isEnabled)
+        let runToolIDs = intent.allowsToolMachinery
+            ? Self.runToolIDs(query: prompt, projectID: projectID, computerUseEnabled: ComputerUseSettings.isEnabled)
+            : []
         let toolBudget = ToolExecutionBudget(limit: maxToolExecutions)
         let bridges: [any Tool] = runToolIDs.compactMap { toolID in
             guard let tool = registry.tool(for: toolID) else { return nil }
             return try? AssistToolBridge(tool: tool, context: context, budget: toolBudget, toolTimeout: toolTimeout, onEvent: bridgeHandler)
         }
 
-        guard !bridges.isEmpty || intent == .conversational else {
+        guard !bridges.isEmpty || !intent.allowsToolMachinery else {
             let message = "No tools are registered, so agent mode cannot run."
             dispatchStatus(.failed(message))
             addStep(AgentStep(kind: .error, title: "Tools Unavailable", detail: message))

@@ -47,6 +47,12 @@ public nonisolated enum ConversationRouter {
     public static func intent(for message: String) -> ConversationIntent {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .direct }
+        // Identity / purpose / capability questions are `.direct`, never
+        // conversational and never a task: they need the authoritative
+        // identity instructions retrieved and a real (brief) answer —
+        // "who are you" used to match the small-talk set and skip
+        // retrieval entirely, and none of them may start a tool loop.
+        if ContextIndexManager.isIdentityQuery(trimmed) && !hasTaskSignal(trimmed) { return .direct }
         if matchesConversationalPattern(trimmed) { return .conversational }
         if hasTaskSignal(trimmed) { return .task }
         return .direct
@@ -145,7 +151,12 @@ public nonisolated enum ConversationRouter {
         "sounds good", "got it", "understood", "makes sense", "good",
         "excellent", "wonderful", "brilliant", "sweet", "neat", "yes",
         "yep", "yeah", "sure", "alright", "fair enough", "no worries",
-        "that works", "works for me", "looks good"
+        "that works", "works for me", "looks good",
+        // Bare interjections: thinking noises with no question and no
+        // task. Classifying "hmm" as a general direct question gave it
+        // the full retrieval treatment; as conversation it gets a
+        // brief, natural reply that invites the actual question.
+        "hmm", "hm", "huh", "mm", "mmm", "hmm okay", "hmm ok"
     ]
 
     private static let farewellPatterns: Set<String> = [

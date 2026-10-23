@@ -165,6 +165,34 @@ public enum ContextIndexManager {
     public static let searchResultTokenBudget = 2_500
     /// Tool ids that are always in the Agent tool bundle when present.
     public static let coreToolIDs: Set<String> = ["context_index_search", "system_asset_lookup"]
+    /// The authoritative identity asset's id / index-entry id. Identity
+    /// questions force-retrieve it (see `isIdentityQuery`): those
+    /// questions tokenize to stopwords and single weak tokens, so the
+    /// lexical gate alone would never select it.
+    public static let identityAssetID = "assistant_identity"
+    public static let identityEntryID = "systemAsset:assistant_identity"
+
+    /// Whether a user message asks about the assistant itself — its
+    /// name, what to call it, its purpose, who/what it is, or what it
+    /// can help with. Deterministic phrase matching on the normalized
+    /// message, deliberately narrow: a message that merely *uses* one
+    /// of these words about something else ("what is your name for
+    /// this variable?") may still match "your name" — retrieving the
+    /// identity summary there is harmless context, never an answer.
+    public static func isIdentityQuery(_ query: String) -> Bool {
+        let text = " " + query.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ") + " "
+        let phrases = [
+            " your name ", " call you ", " who are you ", " what are you ",
+            " your purpose ", " introduce yourself ", " about yourself ",
+            " what can you do ", " what can you help ", " can you help me ",
+            " help me with ", " what do you do ", " are you locally ",
+            " who is locally ", " what is locally "
+        ]
+        return phrases.contains { text.contains($0) }
+    }
     /// The per-project memory tool joins the core set when a project is active.
     public static let projectMemoryToolID = "project_memory"
 
@@ -485,7 +513,8 @@ public enum ContextIndexManager {
         entries: [Entry],
         kind: Kind,
         queryTokens: [String],
-        hasActiveProject: Bool
+        hasActiveProject: Bool,
+        forceIdentityAsset: Bool = false
     ) -> [Entry] {
         let ofKind = entries.filter { $0.kind == kind }
         guard kind == .tool else {
@@ -493,10 +522,17 @@ public enum ContextIndexManager {
                 let s = score(entry: entry, queryTokens: queryTokens)
                 return (s > 0 && isRelevant(entry: entry, queryTokens: queryTokens)) ? (entry: entry, score: s) : nil
             }
-            let sortedEntries = scoredEntries.sorted { lhs, rhs in
+            var sorted = scoredEntries.sorted { lhs, rhs in
                 lhs.score != rhs.score ? lhs.score > rhs.score : lhs.entry.order < rhs.entry.order
+            }.map(\.entry)
+            // Identity queries force the authoritative identity asset
+            // to the front of the asset selection, score or no score.
+            if forceIdentityAsset, kind == .systemAsset,
+               let identity = ofKind.first(where: { $0.id == identityEntryID }) {
+                sorted.removeAll { $0.id == identityEntryID }
+                sorted.insert(identity, at: 0)
             }
-            return sortedEntries.map(\.entry)
+            return sorted
         }
         func isCore(_ entry: Entry) -> Bool {
             entry.isCoreTool || (hasActiveProject && entry.id == "tool:\(projectMemoryToolID)")
@@ -624,6 +660,7 @@ public enum ContextIndexManager {
     ) -> String {
         let budget = mode.bundleTokenBudget
         let queryTokens = tokenize(query)
+        let identityQuery = isIdentityQuery(query)
         // The header states the precedence rule every time: retrieved
         // excerpts are reference material subordinate to the core and
         // mode instructions — they are never text to repeat to the user.
@@ -637,7 +674,11 @@ public enum ContextIndexManager {
             // skill excerpts, no asset summaries, no memory. Injecting
             // capability material into a greeting is what made models
             // answer "hello" with a catalog recitation.
-            if intent == .conversational && kind != .customPrompt { continue }
+            // Identity questions are the one exception: the identity
+            // asset summary is retrieved even on a conversational turn
+            // ("who are you"), because it is the authoritative answer
+            // source for exactly that turn.
+            if intent == .conversational && kind != .customPrompt && !(kind == .systemAsset && identityQuery) { continue }
             // Direct turns (questions, discussion) get relevant reference
             // excerpts but no tool machinery.
             if intent == .direct && kind == .tool { continue }
@@ -646,7 +687,7 @@ public enum ContextIndexManager {
             let pool = entries.filter { mode == .agent || $0.kind != .projectMemory }
             let section = renderSection(
                 kind: kind,
-                candidates: candidates(entries: pool, kind: kind, queryTokens: queryTokens, hasActiveProject: hasActiveProject),
+                candidates: candidates(entries: pool, kind: kind, queryTokens: queryTokens, hasActiveProject: hasActiveProject, forceIdentityAsset: identityQuery),
                 mode: mode,
                 remainingTotal: budget - used
             )
@@ -732,6 +773,9 @@ public enum ContextIndexManager {
             let s = score(entry: entry, queryTokens: queryTokens)
             func diag(_ selected: Bool, _ reason: String) -> RetrievalDiagnostic {
                 RetrievalDiagnostic(entryID: entry.id, kind: entry.kind, score: s, selected: selected, reason: reason)
+            }
+            if entry.id == identityEntryID && isIdentityQuery(query) {
+                return diag(true, "identity query: authoritative identity asset is always retrieved (budget trimming may still apply)")
             }
             if intent == .conversational && entry.kind != .customPrompt {
                 return diag(false, "excluded: conversational turn retrieves standing instructions only")
