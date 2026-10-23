@@ -74,7 +74,17 @@ actor LLMService {
             throw LLMError.modelNotLoaded
         }
 
-        let session = ChatSession(container)
+        // The system prompt becomes the session's `instructions`, which
+        // MLXLMCommon prepends as a real system message. This used to create
+        // a bare `ChatSession(container)` and silently discard `systemPrompt`
+        // (and `temperature`) — every caller that passed tools, system
+        // assets, custom prompts, or skills believed the model had seen
+        // them, and it never had.
+        let session = ChatSession(
+            container,
+            instructions: systemPrompt,
+            generateParameters: Self.generateParameters(temperature: temperature)
+        )
         isCancelled = false
 
         return AsyncStream { continuation in
@@ -103,6 +113,12 @@ actor LLMService {
         }
     }
 
+    /// Builds MLX generation parameters, honoring the caller's temperature.
+    private static func generateParameters(temperature: Double?) -> GenerateParameters {
+        guard let temperature else { return GenerateParameters() }
+        return GenerateParameters(temperature: Float(temperature))
+    }
+
     func generate(
         messages: [(role: String, content: String)],
         videoURLs: [URL] = [],
@@ -114,16 +130,53 @@ actor LLMService {
             throw LLMError.modelNotLoaded
         }
 
-        // Ensure we have a session
-        if chatSession == nil {
-            chatSession = ChatSession(container)
-        }
-        let session = chatSession!
-
         isCancelled = false
 
-        // Only send the last user message — ChatSession tracks history internally
-        let lastUserMessage = messages.last(where: { $0.role == "user" })?.content ?? ""
+        // Rebuild the session for every turn from the caller's messages:
+        //
+        // - `systemPrompt` is passed as the session's `instructions`, so it
+        //   is actually sent as a system message. The old implementation
+        //   accepted the parameter and never used it, which is why the model
+        //   never saw custom prompts, skills, tools, or system assets.
+        // - History is rehydrated from `messages` instead of relying on a
+        //   long-lived session's internal state, so the context matches the
+        //   saved conversation (and survives relaunch / model reload).
+        //   Assistant turns are stripped of <thinking> blocks — reasoning is
+        //   for the user to read, not tokens to re-feed the model.
+        // - System entries already contained in `systemPrompt` (the
+        //   conversation prompt travels inside the built prompt) are not
+        //   duplicated as history.
+        guard let lastUserIndex = messages.lastIndex(where: { $0.role == "user" }) else {
+            throw LLMError.modelNotLoaded
+        }
+        let lastUserMessage = messages[lastUserIndex].content
+
+        var history: [Chat.Message] = []
+        for entry in messages[..<lastUserIndex] {
+            let content = entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !content.isEmpty else { continue }
+            switch entry.role {
+            case "system":
+                if let systemPrompt, systemPrompt.contains(entry.content) { continue }
+                history.append(.system(entry.content))
+            case "assistant":
+                let visible = ThinkingContentParser.visibleContent(of: entry.content)
+                if !visible.isEmpty { history.append(.assistant(visible)) }
+            case "user":
+                history.append(.user(entry.content))
+            default:
+                continue
+            }
+        }
+
+        let session = ChatSession(
+            container,
+            instructions: systemPrompt,
+            history: history,
+            generateParameters: Self.generateParameters(temperature: temperature)
+        )
+        chatSession = session
+
         let videos: [UserInput.Video] = videoURLs.map { .url($0) }
         // Images reach the engine only on this path, and callers gate it on
         // the loaded model actually being a vision model.

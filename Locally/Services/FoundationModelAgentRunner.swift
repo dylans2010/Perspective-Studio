@@ -33,7 +33,8 @@ enum FoundationModelAgentRunner {
         maxTurns: Int,
         dispatchStatus: @escaping @MainActor (AgentHarnessStatus) -> Void,
         addStep: @escaping @MainActor (AgentStep) -> Void,
-        onEvent: (@MainActor (AgentHarnessEvent) -> Void)?
+        onEvent: (@MainActor (AgentHarnessEvent) -> Void)?,
+        additionalSystemPrompt: String? = nil
     ) async -> AgentExecutionOutcome {
         let availability = AppleFoundationModel.availability
         guard availability.isAvailable else {
@@ -112,7 +113,7 @@ enum FoundationModelAgentRunner {
 
         dispatchStatus(.thinking)
 
-        let instructions = buildInstructions(toolNames: bridges.map(\.name))
+        let instructions = buildInstructions(toolNames: bridges.map(\.name), additionalSystemPrompt: additionalSystemPrompt)
         let session = LanguageModelSession(tools: bridges, instructions: instructions)
 
         var answer = ""
@@ -155,10 +156,10 @@ enum FoundationModelAgentRunner {
         return AgentExecutionOutcome(answer: answer, steps: collector.steps, success: true)
     }
 
-    private static func buildInstructions(toolNames: [String]) -> String {
+    private static func buildInstructions(toolNames: [String], additionalSystemPrompt: String? = nil) -> String {
         let assetsIndex = SystemAssetsManager.shared.generatePromptIndex()
 
-        return """
+        var instructions = """
         # Locally Agent Runtime
 
         You are an autonomous assistant running privately on this Mac with Apple Intelligence.
@@ -176,6 +177,16 @@ enum FoundationModelAgentRunner {
         - Use Markdown headings, lists and fenced code blocks when they help.
         - Keep it short enough to fit an on-device model's context.
         """
+
+        // Custom system prompts + skills + thinking format, assembled by
+        // ModelContextBuilder at the call site. The on-device context is
+        // small, so callers keep this compact — but it must be present at
+        // all, or the model (correctly, from its view) denies having them.
+        if let additionalSystemPrompt,
+           !additionalSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            instructions += "\n\n" + additionalSystemPrompt
+        }
+        return instructions
     }
 }
 

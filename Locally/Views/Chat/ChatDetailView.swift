@@ -80,9 +80,17 @@ struct ChatDetailView: View {
                 )
                 .ignoresSafeArea()
             } else {
-                // Modern clean solid macOS background so content and typography are 100% crisp and readable
+                // Modern clean solid macOS background so content and typography are 100% crisp and readable.
+                // In Agent mode the background takes a faint cyan cast — a
+                // second, ambient signal of the mode alongside the banner.
                 Group {
-                    if colorScheme == .dark {
+                    if chatViewModel.isAgentMode {
+                        if colorScheme == .dark {
+                            Color(red: 0.05, green: 0.10, blue: 0.12)
+                        } else {
+                            Color(red: 0.93, green: 0.97, blue: 0.98)
+                        }
+                    } else if colorScheme == .dark {
                         Color(red: 0.08, green: 0.085, blue: 0.10)
                     } else {
                         Color(red: 0.965, green: 0.969, blue: 0.976)
@@ -94,6 +102,14 @@ struct ChatDetailView: View {
             VStack(spacing: 0) {
                 // Top floating controls: Mode Selector + Model Selector + Actions
                 topControlBar
+
+                // Agent mode gets its own persistent banner, so the current
+                // mode is never in doubt (previously only the small toggle
+                // pill and the composer placeholder changed).
+                if chatViewModel.isAgentMode {
+                    AgentModeBannerView(chatViewModel: chatViewModel)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
 
                 // Main content: either welcome hero + suggestion cards or active message stream
                 if isEmptyConversation {
@@ -374,18 +390,38 @@ struct ChatDetailView: View {
         VStack(spacing: 16) {
             Spacer()
 
-            Text("Meet the new Apple Foundation")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 3)
+            if chatViewModel.isAgentMode {
+                Image(systemName: "cpu.fill")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(.cyan)
+                    .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 3)
 
-            Text("Use Apple’s latest on-device foundation model — with better answers, improved instruction-following, and image understanding.")
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(.white.opacity(0.82))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-                .lineSpacing(3)
+                Text("Agent Mode")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 3)
+
+                Text("This conversation runs as an autonomous agent: the model can call Locally's tools, consult its system assets, and work through multi-step tasks — inspecting files, searching your workspace, and reporting back. Switch to Chat above for a plain conversation with no tool execution.")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 520)
+                    .lineSpacing(3)
+            } else {
+                Text("Meet the new Apple Foundation")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 3)
+
+                Text("Use Apple’s latest on-device foundation model — with better answers, improved instruction-following, and image understanding.")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 520)
+                    .lineSpacing(3)
+            }
 
             Spacer()
         }
@@ -403,6 +439,7 @@ struct ChatDetailView: View {
                         MessageRowView(
                             message: message,
                             toolCalls: chatViewModel.messageToolCalls[message.id] ?? [],
+                            isStreaming: chatViewModel.isGenerating && message.id == sortedMessages.last?.id,
                             onBranch: { chatViewModel.branchConversation(from: conversation, through: message, in: modelContext) },
                             onRegenerate: { chatViewModel.regenerateLastResponse(in: modelContext) },
                             onEdit: {
@@ -668,10 +705,12 @@ struct ChatDetailView: View {
                 .overlay(
                     Capsule()
                         .stroke(
-                            isEmptyConversation
-                                ? Color.white.opacity(0.18)
-                                : Color.primary.opacity(0.12),
-                            lineWidth: 1
+                            chatViewModel.isAgentMode
+                                ? Color.cyan.opacity(0.55)
+                                : (isEmptyConversation
+                                    ? Color.white.opacity(0.18)
+                                    : Color.primary.opacity(0.12)),
+                            lineWidth: chatViewModel.isAgentMode ? 1.5 : 1
                         )
                 )
                 .shadow(
@@ -861,6 +900,8 @@ private struct MessageRowView: View {
     @Environment(\.colorScheme) private var colorScheme
     let message: Message
     var toolCalls: [ToolCallRecord] = []
+    /// True while this row is the assistant turn currently being generated.
+    var isStreaming: Bool = false
     var onBranch: (() -> Void)? = nil
     var onRegenerate: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
@@ -869,6 +910,13 @@ private struct MessageRowView: View {
 
     private var isAssistant: Bool {
         message.role == .assistant
+    }
+
+    /// Assistant content split into reasoning vs. answer. The model's
+    /// <thinking> blocks render in `ThinkingModelUI`, never inside the
+    /// answer bubble; user and system messages parse to themselves.
+    private var parsed: ThinkingContentParser.ParsedContent {
+        isAssistant ? ThinkingContentParser.parse(message.content) : .init(answer: message.content)
     }
 
     var body: some View {
@@ -907,8 +955,21 @@ private struct MessageRowView: View {
                     .padding(.bottom, 4)
                 }
 
-                // Bubble — Markdown with full typography & code panels
-                MarkdownContentView(content: message.content)
+                // The model's reasoning, in its own separate UI above the
+                // answer — never mixed into the answer bubble.
+                if isAssistant && parsed.hasThinking {
+                    ThinkingModelUI(
+                        thinkingText: parsed.thinkingText,
+                        isStreaming: isStreaming && parsed.isThinkingOpen
+                    )
+                }
+
+                // Bubble — Markdown with full typography & code panels.
+                // Assistant bubbles show the parsed answer only (thinking
+                // blocks stripped); while the model is still inside an
+                // unclosed thinking tag there is no answer to show yet.
+                if !isAssistant || !parsed.answer.isEmpty || !parsed.hasThinking {
+                MarkdownContentView(content: isAssistant ? parsed.answer : message.content)
                     .font(.system(size: 14))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 16)
@@ -936,7 +997,7 @@ private struct MessageRowView: View {
                         y: 2
                     )
                     .contextMenu {
-                        Button("Copy Text", systemImage: "doc.on.doc") { copyText(message.content) }
+                        Button("Copy Text", systemImage: "doc.on.doc") { copyText(isAssistant ? parsed.answer : message.content) }
                         if let onBranch {
                             Button("Branch From Here", systemImage: "arrow.branch", action: onBranch)
                         }
@@ -947,12 +1008,14 @@ private struct MessageRowView: View {
                             Button("Regenerate Response", systemImage: "arrow.clockwise", action: onRegenerate)
                         }
                     }
+                }
 
-                // Assistant action buttons (Copy & TTS)
-                if isAssistant && !message.content.isEmpty {
+                // Assistant action buttons (Copy & TTS) — these act on the
+                // answer, not the reasoning shown in ThinkingModelUI.
+                if isAssistant && !parsed.answer.isEmpty {
                     HStack(spacing: 12) {
                         Button {
-                            copyText(message.content)
+                            copyText(parsed.answer)
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
@@ -967,7 +1030,7 @@ private struct MessageRowView: View {
                             if tts.speakingMessageID == message.id {
                                 tts.stop()
                             } else {
-                                tts.speak(text: message.content, messageID: message.id)
+                                tts.speak(text: parsed.answer, messageID: message.id)
                             }
                         } label: {
                             HStack(spacing: 4) {

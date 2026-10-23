@@ -378,35 +378,32 @@ final class ChatViewModel {
                     userMessage: lastUserContent
                 )
 
-                var effectiveSystemPrompt = conversation.systemPrompt ?? ""
-
-                // Inject Active Skills into System Prompt
-                if !activeSkills.isEmpty {
-                    let skillsContext = activeSkills.map { skill in
-                        "### Active Skill: \(skill.name)\n\(skill.fullMarkdown)"
-                    }.joined(separator: "\n\n")
-                    effectiveSystemPrompt += "\n\n[Active Skills Instructions]:\n" + skillsContext
-                }
-
-                let isThinkingEnabled = UserDefaults.standard.bool(forKey: "enableThinkingMode")
-                let thinkingBudget = UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium"
-                if isThinkingEnabled {
-                    let thinkingInstruction: String
-                    switch thinkingBudget {
-                    case "low":
-                        thinkingInstruction = "\n\n[Reasoning]: Think briefly step-by-step before answering."
-                    case "high":
-                        thinkingInstruction = "\n\n[Reasoning]: Perform thorough, deep, and rigorous step-by-step chain-of-thought analysis before concluding."
-                    default:
-                        thinkingInstruction = "\n\n[Reasoning]: Think step-by-step and reason clearly through the problem."
-                    }
-                    effectiveSystemPrompt += thinkingInstruction
-                }
-
-                if let knowledge = pendingKnowledgeContext {
-                    effectiveSystemPrompt += "\n\n[Relevant passages from the user's local knowledge base — cite them like [Title · passage N] when you use them]:\n" + knowledge
-                    pendingKnowledgeContext = nil
-                }
+                // The effective system prompt is assembled in ONE place so
+                // the model actually learns what it has: the custom prompts
+                // (global + conversation), its tools, its system assets, and
+                // its skills — plus this turn's knowledge passages and the
+                // <thinking> format instruction. Previously this block only
+                // ever contained the conversation prompt + active skills,
+                // and on the MLX path even that was discarded downstream.
+                let knowledge = pendingKnowledgeContext
+                pendingKnowledgeContext = nil
+                let effectiveSystemPrompt = ModelContextBuilder.build(
+                    ModelContextBuilder.Input(
+                        globalCustomPrompt: UserDefaults.standard.string(forKey: "customSystemPrompt") ?? "",
+                        conversationSystemPrompt: conversation.systemPrompt ?? "",
+                        isAgentMode: false,
+                        includeTools: true,
+                        compactToolsList: ModelContextBuilder.compactToolsList(from: ToolsRegistry.shared.allTools),
+                        includeSystemAssets: true,
+                        systemAssetsIndex: SystemAssetsManager.shared.generatePromptIndex(),
+                        availableSkills: SkillsManager.shared.skills,
+                        activeSkills: Array(activeSkills),
+                        thinkingEnabled: UserDefaults.standard.bool(forKey: "enableThinkingMode"),
+                        thinkingBudget: UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium",
+                        knowledgeContext: knowledge,
+                        modelDisplayName: displayName(for: selectedModelID)
+                    )
+                )
 
                 // Re-attach this turn's images (persisted copies) for vision models.
                 let lastUserMessage = conversation.sortedMessages.last(where: { $0.role == .user })
@@ -454,9 +451,11 @@ final class ChatViewModel {
                     flushPendingTokens(force: true)
                 }
 
-                // Auto-read only if the setting is enabled
+                // Auto-read only if the setting is enabled — and read the
+                // answer, not the model's <thinking> reasoning.
                 if UserDefaults.standard.bool(forKey: "autoReadAloud") {
-                    TTSService.shared.speak(text: assistantMessage.content, messageID: assistantMessage.id)
+                    let spoken = ThinkingContentParser.visibleContent(of: assistantMessage.content)
+                    TTSService.shared.speak(text: spoken.isEmpty ? assistantMessage.content : spoken, messageID: assistantMessage.id)
                 }
 
                 conversation.updatedAt = .now
@@ -476,11 +475,32 @@ final class ChatViewModel {
         liveToolCalls = []
         let userPrompt = conversation.sortedMessages.last(where: { $0.role == .user })?.content ?? ""
 
+        // The harness adds the full tool schemas + system-asset index itself;
+        // what it never received before — and why Agent mode also claimed to
+        // have no custom prompt and no skills — is everything assembled
+        // here: custom prompts, skills (available + active), and the
+        // <thinking> format instruction.
+        let agentContextPrompt = ModelContextBuilder.build(
+            ModelContextBuilder.Input(
+                globalCustomPrompt: UserDefaults.standard.string(forKey: "customSystemPrompt") ?? "",
+                conversationSystemPrompt: conversation.systemPrompt ?? "",
+                isAgentMode: true,
+                includeTools: false,
+                includeSystemAssets: false,
+                availableSkills: SkillsManager.shared.skills,
+                activeSkills: Array(activeSkills),
+                thinkingEnabled: UserDefaults.standard.bool(forKey: "enableThinkingMode"),
+                thinkingBudget: UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium",
+                modelDisplayName: displayName(for: selectedModelID)
+            )
+        )
+
         let outcome = await AntigravityAgentHarness.shared.run(
             prompt: userPrompt,
             modelID: selectedModelID,
             maxTurns: 10,
-            backend: selectedBackend
+            backend: selectedBackend,
+            additionalSystemPrompt: agentContextPrompt
         ) { [weak self] event in
             guard let self else { return }
             switch event {
@@ -761,7 +781,8 @@ final class ChatViewModel {
             case "user":
                 lines.append("User: \(message.content)")
             case "assistant":
-                lines.append("Assistant: \(message.content)")
+                // Reasoning (<thinking> blocks) is not re-sent as history.
+                lines.append("Assistant: \(ThinkingContentParser.visibleContent(of: message.content))")
             case "system":
                 // The conversation's system prompt already travels as the
                 // session instructions; other system turns (the running

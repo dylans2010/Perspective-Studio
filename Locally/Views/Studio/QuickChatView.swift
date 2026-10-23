@@ -57,10 +57,21 @@ struct QuickChatView: View {
             }
 
             if !response.isEmpty {
+                let parsed = ThinkingContentParser.parse(response)
                 ScrollView {
-                    Text(response)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if parsed.hasThinking {
+                            ThinkingModelUI(
+                                thinkingText: parsed.thinkingText,
+                                isStreaming: isRunning && parsed.isThinkingOpen
+                            )
+                        }
+                        if !parsed.answer.isEmpty {
+                            Text(parsed.answer)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                 }
                 .frame(minHeight: 80)
             }
@@ -82,10 +93,28 @@ struct QuickChatView: View {
         response = ""
         let text = prompt
         let backend = chatViewModel.selectedBackend
+        // Quick Chat used to pass `systemPrompt: nil`, so its model knew
+        // nothing about its tools, system assets, custom prompt, or skills.
+        // It now gets the same awareness prompt as the main chat.
+        let systemPrompt = ModelContextBuilder.build(
+            ModelContextBuilder.Input(
+                globalCustomPrompt: UserDefaults.standard.string(forKey: "customSystemPrompt") ?? "",
+                isAgentMode: false,
+                includeTools: true,
+                compactToolsList: ModelContextBuilder.compactToolsList(from: ToolsRegistry.shared.allTools),
+                includeSystemAssets: true,
+                systemAssetsIndex: SystemAssetsManager.shared.generatePromptIndex(),
+                availableSkills: SkillsManager.shared.skills,
+                activeSkills: Array(chatViewModel.activeSkills),
+                thinkingEnabled: UserDefaults.standard.bool(forKey: "enableThinkingMode"),
+                thinkingBudget: UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium",
+                modelDisplayName: model.displayName
+            )
+        )
         Task {
             do {
                 _ = try await backend.load(model: model)
-                let stream = try backend.stream(prompt: text, systemPrompt: nil)
+                let stream = try backend.stream(prompt: text, systemPrompt: systemPrompt)
                 for try await event in stream {
                     if case .token(let token) = event {
                         response += token

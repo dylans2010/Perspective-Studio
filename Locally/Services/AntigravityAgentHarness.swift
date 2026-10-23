@@ -149,6 +149,7 @@ public final class AntigravityAgentHarness {
         workspaceRoot: URL = URL.documentsDirectory,
         maxTurns: Int = 10,
         backend: (any InferenceBackend)? = nil,
+        additionalSystemPrompt: String? = nil,
         onEvent: (@MainActor (AgentHarnessEvent) -> Void)? = nil
     ) async -> AgentExecutionOutcome {
         cancel()
@@ -186,7 +187,8 @@ public final class AntigravityAgentHarness {
                 maxTurns: maxTurns,
                 dispatchStatus: dispatchStatus,
                 addStep: addStep,
-                onEvent: onEvent
+                onEvent: onEvent,
+                additionalSystemPrompt: additionalSystemPrompt
             )
         }
 
@@ -233,7 +235,7 @@ public final class AntigravityAgentHarness {
             sessionExecutionMode: .autopilot
         )
 
-        let systemPrompt = buildSystemPrompt(context: assistContext)
+        let systemPrompt = buildSystemPrompt(context: assistContext, additionalSystemPrompt: additionalSystemPrompt)
 
         // Initial goal step
         addStep(AgentStep(
@@ -364,11 +366,11 @@ public final class AntigravityAgentHarness {
 
     // MARK: - Prompt Construction
 
-    private func buildSystemPrompt(context: AssistContext) -> String {
+    private func buildSystemPrompt(context: AssistContext, additionalSystemPrompt: String? = nil) -> String {
         let assetsIndex = SystemAssetsManager.shared.generatePromptIndex()
         let toolsSchema = ToolsRegistry.shared.schemaDescriptions()
 
-        return """
+        var prompt = """
         # Antigravity Agent Runtime
 
         You are an autonomous AI agent running locally and privately on macOS via Locally.
@@ -390,6 +392,16 @@ public final class AntigravityAgentHarness {
         - Lead directly with facts, code, or answers. Avoid fluff and filler.
         - Structure your final response with rich Markdown headers, bullet points, and code fences.
         """
+
+        // The caller's context — custom system prompts, skills, and the
+        // <thinking> format instruction assembled by ModelContextBuilder.
+        // This is the part Agent mode never received before this parameter
+        // existed, so the agent denied having any of it.
+        if let additionalSystemPrompt,
+           !additionalSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            prompt += "\n\n" + additionalSystemPrompt
+        }
+        return prompt
     }
 
     private struct Turn {
