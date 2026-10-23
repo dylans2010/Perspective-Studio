@@ -330,26 +330,26 @@ public enum AssistToolErrorCode: String, Codable, Sendable, CaseIterable {
     }
 }
 
-public enum AssistToolDataKey {
-    public static let content = "content"
-    public static let explanation = "explanation"
-    public static let diff = "diff"
-    public static let testResults = "test_results"
-    public static let buildStatus = "build_status"
-    public static let searchResults = "results"
-    public static let planId = "planId"
-    public static let breakdown = "breakdown"
-    public static let count = "count"
-    public static let truncated = "truncated"
-    public static let path = "path"
-    public static let exitCode = "exitCode"
-    public static let durationMs = "durationMs"
-    public static let stdout = "stdout"
-    public static let stderr = "stderr"
-    public static let startLine = "startLine"
-    public static let endLine = "endLine"
-    public static let totalLines = "totalLines"
-    public static let fullyAvailable = "fullyAvailable"
+public enum AssistToolDataKey: Sendable {
+    nonisolated public static let content = "content"
+    nonisolated public static let explanation = "explanation"
+    nonisolated public static let diff = "diff"
+    nonisolated public static let testResults = "test_results"
+    nonisolated public static let buildStatus = "build_status"
+    nonisolated public static let searchResults = "results"
+    nonisolated public static let planId = "planId"
+    nonisolated public static let breakdown = "breakdown"
+    nonisolated public static let count = "count"
+    nonisolated public static let truncated = "truncated"
+    nonisolated public static let path = "path"
+    nonisolated public static let exitCode = "exitCode"
+    nonisolated public static let durationMs = "durationMs"
+    nonisolated public static let stdout = "stdout"
+    nonisolated public static let stderr = "stderr"
+    nonisolated public static let startLine = "startLine"
+    nonisolated public static let endLine = "endLine"
+    nonisolated public static let totalLines = "totalLines"
+    nonisolated public static let fullyAvailable = "fullyAvailable"
 }
 
 // MARK: - AssistToolResult
@@ -370,7 +370,7 @@ public struct AssistToolResult: Codable, Sendable {
     public let afterContent: String?
     public var toolErrorCode: AssistToolErrorCode?
 
-    public init(
+    nonisolated public init(
         success: Bool,
         output: String,
         data: [String: String]? = nil,
@@ -402,7 +402,7 @@ public struct AssistToolResult: Codable, Sendable {
         self.toolErrorCode = toolErrorCode
     }
 
-    public static func success(
+    nonisolated public static func success(
         _ output: String,
         data: [String: String]? = nil,
         diff: String? = nil,
@@ -428,7 +428,7 @@ public struct AssistToolResult: Codable, Sendable {
         )
     }
 
-    public static func failure(
+    nonisolated public static func failure(
         _ error: String,
         code: AssistToolErrorCode? = nil,
         diagnostics: [String] = [],

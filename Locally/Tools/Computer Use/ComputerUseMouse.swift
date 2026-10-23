@@ -32,7 +32,7 @@ public enum ComputerUseMouse {
     }
 
     private static func makeMouseEvent(type: CGEventType, point: CGPoint, button: CGMouseButton) throws -> CGEvent {
-        guard let event = CGEvent(mouseEventSource: nil, type: type, mouseCursorPosition: point, mouseButton: button) else {
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button) else {
             throw ComputerUseError.executionFailed("Could not create a CGEvent of type \(type.rawValue).")
         }
         return event

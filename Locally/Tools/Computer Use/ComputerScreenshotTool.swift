@@ -41,13 +41,15 @@ public struct ComputerScreenshotTool: AssistTool {
         }
         do {
             let displayID = ComputerUseArguments.int(input, "displayId", "display_id").map { UInt32($0) }
-            var region: ComputerUseRect?
+            let region: ComputerUseRect?
             if let regionDict = ComputerUseArguments.object(input, "region"),
                let x = ComputerUseArguments.double(regionDict, "x"),
                let y = ComputerUseArguments.double(regionDict, "y"),
                let width = ComputerUseArguments.double(regionDict, "width"),
                let height = ComputerUseArguments.double(regionDict, "height") {
                 region = ComputerUseRect(x: x, y: y, width: width, height: height)
+            } else {
+                region = nil
             }
             let capture = try await ComputerUseService.withTimeout {
                 try await ComputerUseScreen.capture(displayID: displayID, region: region)

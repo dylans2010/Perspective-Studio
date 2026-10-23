@@ -141,7 +141,7 @@ public enum ComputerUsePermissions {
         #if os(macOS)
         switch kind {
         case .accessibility:
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            let options = ["AXTrustedCheckOptionPrompt" as CFString: true as CFBoolean] as CFDictionary
             return AXIsProcessTrustedWithOptions(options)
         case .screenRecording:
             return CGRequestScreenCaptureAccess()

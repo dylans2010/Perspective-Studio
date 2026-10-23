@@ -27,12 +27,12 @@ enum ThinkingContentParser {
         var thinkingText: String { thinkingBlocks.joined(separator: "\n\n") }
     }
 
-    private static let tagPairs: [(open: String, close: String)] = [
+    nonisolated(unsafe) private static let tagPairs: [(open: String, close: String)] = [
         ("<thinking>", "</thinking>"),
         ("<think>", "</think>")
     ]
 
-    static func parse(_ raw: String) -> ParsedContent {
+    nonisolated static func parse(_ raw: String) -> ParsedContent {
         var result = ParsedContent()
         var remaining = raw[raw.startIndex...]
 
@@ -80,12 +80,12 @@ enum ThinkingContentParser {
     }
 
     /// The user-visible part of a response (thinking blocks removed).
-    static func visibleContent(of raw: String) -> String {
+    nonisolated static func visibleContent(of raw: String) -> String {
         parse(raw).answer
     }
 
     /// True when `raw` contains any thinking tag, open or closed.
-    static func containsThinkingTags(_ raw: String) -> Bool {
+    nonisolated static func containsThinkingTags(_ raw: String) -> Bool {
         tagPairs.contains { pair in
             raw.range(of: pair.open, options: .caseInsensitive) != nil
         }
