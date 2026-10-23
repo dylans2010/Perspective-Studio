@@ -104,13 +104,12 @@ struct DownloadsView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(Color(.controlBackgroundColor))
-            .clipShape(.rect(cornerRadius: 10))
+            .liquidGlass(.rect(cornerRadius: 12))
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
 
             // Capability Pills (Tools, Vision, Thinking, Code, Chat)
-            ScrollView(.horizontal, showsIndicators: false) {
+            ScrollView(.horizontal) {
                 HStack(spacing: 8) {
                     FilterChip(
                         title: "All Capabilities",
@@ -133,6 +132,7 @@ struct DownloadsView: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 6)
             }
+            .scrollIndicators(.hidden)
 
             Divider()
 
@@ -516,18 +516,18 @@ private struct FilterChip: View {
                     Image(systemName: icon)
                         .font(.caption2)
                 }
-                Text(title)
-                    .font(.caption)
-                    .fontWeight(isSelected ? .semibold : .regular)
+                if isSelected {
+                    Text(title)
+                        .font(.caption)
+                        .bold()
+                } else {
+                    Text(title)
+                        .font(.caption)
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(isSelected ? color.opacity(0.2) : Color(.controlBackgroundColor))
-            .foregroundStyle(isSelected ? color : .primary)
-            .clipShape(.capsule)
-            .overlay(
-                Capsule().stroke(isSelected ? color : Color.primary.opacity(0.1), lineWidth: 1)
-            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .liquidGlass(.capsule, isClear: !isSelected)
         }
         .buttonStyle(.plain)
     }

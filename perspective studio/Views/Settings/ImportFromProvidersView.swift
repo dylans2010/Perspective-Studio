@@ -115,9 +115,7 @@ struct ImportFromProvidersView: View {
                                     .padding(12)
                             }
                             .frame(height: 140)
-                            .background(Color(.controlBackgroundColor))
-                            .clipShape(.rect(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.1), lineWidth: 1))
+                            .liquidGlass(.rect(cornerRadius: 10), isClear: true)
 
                             Button {
                                 copyPromptToClipboard()
@@ -133,8 +131,7 @@ struct ImportFromProvidersView: View {
                         }
                     }
                     .padding(16)
-                    .background(Color(.windowBackgroundColor).opacity(0.5))
-                    .clipShape(.rect(cornerRadius: 14))
+                    .liquidGlass(.rect(cornerRadius: 16))
 
                     // Step 2: Paste Response and Apply
                     VStack(alignment: .leading, spacing: 12) {
@@ -150,9 +147,7 @@ struct ImportFromProvidersView: View {
                             .font(.system(size: 13))
                             .frame(minHeight: 160)
                             .padding(8)
-                            .background(Color(.controlBackgroundColor))
-                            .clipShape(.rect(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.1), lineWidth: 1))
+                            .liquidGlass(.rect(cornerRadius: 10), isClear: true)
 
                         HStack {
                             Button("Clear") {
@@ -178,8 +173,7 @@ struct ImportFromProvidersView: View {
                         }
                     }
                     .padding(16)
-                    .background(Color(.windowBackgroundColor).opacity(0.5))
-                    .clipShape(.rect(cornerRadius: 14))
+                    .liquidGlass(.rect(cornerRadius: 16))
                 }
                 .padding(24)
             }

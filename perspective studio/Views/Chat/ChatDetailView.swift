@@ -26,9 +26,6 @@ struct ChatDetailView: View {
     @AppStorage("customSystemPrompt") private var globalSystemPrompt: String = ""
     @AppStorage("enableThinkingMode") private var enableThinkingMode: Bool = false
 
-    @State private var showingModelPicker = false
-    @State private var showingQuickPrompts = false
-    @State private var showingAttachmentPicker = false
     @FocusState private var isInputFocused: Bool
 
     private let suggestions: [ChatPromptSuggestion] = [
@@ -72,7 +69,7 @@ struct ChatDetailView: View {
 
     var body: some View {
         ZStack {
-            // Full-window background gradient matching the mockup
+            // Full-window background gradient providing underlying color for Liquid Glass refraction
             LinearGradient(
                 colors: activeGradientColors,
                 startPoint: .top,
@@ -81,100 +78,67 @@ struct ChatDetailView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Top control bar
-                topNavigationBar
-
-                // Main content: either the welcome hero + suggestion cards or active message stream
+                // Main content: either welcome hero + suggestion cards or active message stream
                 if isEmptyConversation {
                     emptyStateContent
                 } else {
                     messageStreamContent
                 }
 
-                // Suggestion pills row (shown on empty conversation, or when composer is focused)
+                // Suggestion cards row using pure Liquid Glass
                 if isEmptyConversation {
                     suggestionCardsRow
-                        .padding(.bottom, 12)
+                        .padding(.bottom, 14)
                 }
 
-                // Bottom floating composer bar
+                // Bottom floating composer bar using pure Liquid Glass
                 bottomComposerBar
                     .padding(.horizontal, 20)
                     .padding(.bottom, 16)
             }
         }
+        .toolbar {
+            // Leading: Sidebar Toggle
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    onToggleSidebar?()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .help("Toggle Sidebar")
+            }
+
+            // Principal / Center: Model Selector Pill adopting pure Liquid Glass
+            ToolbarItem(placement: .principal) {
+                modelSelectorPill
+            }
+
+            // Trailing: Settings & New Chat
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    onOpenSettings?()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .help("Settings")
+
+                Button {
+                    createNewChat()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .help("New Chat (⌘N)")
+            }
+        }
         .onAppear {
             chatViewModel.scanInstalledModels()
-            // If conversation has no custom system prompt but global exists, copy it
             if (conversation.systemPrompt == nil || conversation.systemPrompt?.isEmpty == true) && !globalSystemPrompt.isEmpty {
                 conversation.systemPrompt = globalSystemPrompt
             }
         }
     }
 
-    // MARK: - Top Navigation Bar
-
-    private var topNavigationBar: some View {
-        HStack(spacing: 12) {
-            // Left Controls: Settings button + Sidebar toggle button
-            HStack(spacing: 10) {
-                Button {
-                    onOpenSettings?()
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .frame(width: 28, height: 28)
-                        .background(.ultraThinMaterial.opacity(0.4))
-                        .clipShape(.circle)
-                        .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .help("Settings")
-
-                Button {
-                    onToggleSidebar?()
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .frame(width: 32, height: 28)
-                        .background(.ultraThinMaterial.opacity(0.4))
-                        .clipShape(.rect(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .help("Toggle Sidebar")
-            }
-
-            Spacer()
-
-            // Center: Model Selector Pill
-            modelSelectorPill
-
-            Spacer()
-
-            // Right: New Chat Compose Button
-            Button {
-                createNewChat()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(width: 32, height: 32)
-                    .background(.ultraThinMaterial.opacity(0.4))
-                    .clipShape(.rect(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .help("New Chat (⌘N)")
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-    }
-
-    // MARK: - Model Selector Pill
+    // MARK: - Model Selector Pill (Pure Liquid Glass)
 
     private var modelSelectorPill: some View {
         Menu {
@@ -209,20 +173,18 @@ struct ChatDetailView: View {
                 chatViewModel.scanInstalledModels()
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Text(currentModelTitle)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.8))
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 6)
-            .background(Color.black.opacity(0.25))
-            .clipShape(.capsule)
-            .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.8))
+            .liquidGlass(.capsule)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -235,14 +197,14 @@ struct ChatDetailView: View {
             Spacer()
 
             Text("Meet the new Apple Foundation")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
+                .font(.system(size: 28, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
-                .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 2)
+                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 3)
 
             Text("Use Apple’s latest on-device foundation model — with better answers, improved instruction-following, and image understanding.")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(.white.opacity(0.78))
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(.white.opacity(0.82))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
                 .lineSpacing(3)
@@ -270,10 +232,10 @@ struct ChatDetailView: View {
                                 .controlSize(.small)
                             Text("Thinking & Generating...")
                                 .font(.caption)
-                                .foregroundStyle(.white.opacity(0.8))
+                                .foregroundStyle(.white.opacity(0.85))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, 20)
                         .padding(.vertical, 8)
                     }
                 }
@@ -294,11 +256,11 @@ struct ChatDetailView: View {
         }
     }
 
-    // MARK: - Suggestion Cards Row
+    // MARK: - Suggestion Cards Row (Pure Liquid Glass)
 
     private var suggestionCardsRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
+        ScrollView(.horizontal) {
+            HStack(spacing: 12) {
                 ForEach(suggestions) { item in
                     Button {
                         applySuggestion(item)
@@ -310,50 +272,44 @@ struct ChatDetailView: View {
 
                             Text(item.detail)
                                 .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(.white.opacity(0.65))
+                                .foregroundStyle(.white.opacity(0.72))
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color.black.opacity(0.38))
-                        .clipShape(.rect(cornerRadius: 14))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(.white.opacity(0.08), lineWidth: 1)
-                        )
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .liquidGlass(.rect(cornerRadius: 16))
                     }
                     .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 20)
         }
+        .scrollIndicators(.hidden)
     }
 
-    // MARK: - Bottom Floating Composer Bar
+    // MARK: - Bottom Floating Composer Bar (Pure Liquid Glass)
 
     private var bottomComposerBar: some View {
         VStack(spacing: 8) {
-            // Display attachments if present
+            // Attachments pill list
             if !chatViewModel.attachedFileURLs.isEmpty || chatViewModel.attachedVideoURL != nil {
                 attachmentsRow
             }
 
             HStack(spacing: 10) {
-                // Left '+' Attachment Button
+                // Left '+' Attachment Button in Liquid Glass
                 Button {
                     pickAttachments()
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
-                        .background(Color.black.opacity(0.38))
-                        .clipShape(.circle)
-                        .overlay(Circle().stroke(.white.opacity(0.08), lineWidth: 1))
+                        .liquidGlass(.circle)
                 }
                 .buttonStyle(.plain)
-                .help("Attach Files or Images")
+                .help("Attach Files or Media")
 
-                // Left Lightbulb Brainstorm / Modes Button
+                // Left Lightbulb Brainstorm / Modes Button in Liquid Glass
                 Menu {
                     Button("Brainstorm Ideas") {
                         chatViewModel.messageText = "Brainstorm 5 innovative ideas for: "
@@ -373,19 +329,17 @@ struct ChatDetailView: View {
                     }
                 } label: {
                     Image(systemName: "lightbulb")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
-                        .background(Color.black.opacity(0.38))
-                        .clipShape(.circle)
-                        .overlay(Circle().stroke(.white.opacity(0.08), lineWidth: 1))
+                        .liquidGlass(.circle)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help("Suggested Modes & Prompts")
 
-                // Main Rounded Input Capsule
-                HStack(spacing: 8) {
+                // Main Input Capsule in Pure Liquid Glass
+                HStack(spacing: 10) {
                     TextField("Ask anything", text: $chatViewModel.messageText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...5)
@@ -402,7 +356,7 @@ struct ChatDetailView: View {
                             chatViewModel.stopGenerating()
                         } label: {
                             Image(systemName: "stop.fill")
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.system(size: 12, weight: .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 30, height: 30)
                                 .background(Color.red.opacity(0.85))
@@ -418,7 +372,7 @@ struct ChatDetailView: View {
                                 .font(.system(size: 13, weight: .bold))
                                 .foregroundStyle(canSend ? .black : .white.opacity(0.4))
                                 .frame(width: 30, height: 30)
-                                .background(canSend ? Color.white : Color.white.opacity(0.18))
+                                .background(canSend ? Color.white : Color.white.opacity(0.2))
                                 .clipShape(.circle)
                         }
                         .buttonStyle(.plain)
@@ -429,12 +383,7 @@ struct ChatDetailView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
                 .frame(minHeight: 46)
-                .background(Color.black.opacity(0.42))
-                .clipShape(.rect(cornerRadius: 23))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 23)
-                        .stroke(.white.opacity(0.10), lineWidth: 1)
-                )
+                .liquidGlass(.capsule)
             }
         }
     }
@@ -442,7 +391,7 @@ struct ChatDetailView: View {
     // MARK: - Attachments Row
 
     private var attachmentsRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        ScrollView(.horizontal) {
             HStack(spacing: 8) {
                 if let videoURL = chatViewModel.attachedVideoURL {
                     attachmentChip(name: videoURL.lastPathComponent, icon: "film") {
@@ -456,6 +405,7 @@ struct ChatDetailView: View {
                 }
             }
         }
+        .scrollIndicators(.hidden)
     }
 
     private func attachmentChip(name: String, icon: String, onRemove: @escaping () -> Void) -> some View {
@@ -474,14 +424,13 @@ struct ChatDetailView: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.8))
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(Color.white.opacity(0.15))
-        .clipShape(.capsule)
+        .liquidGlass(.capsule)
     }
 
     // MARK: - Actions
@@ -492,12 +441,6 @@ struct ChatDetailView: View {
 
     private func sendCurrentMessage() {
         guard canSend else { return }
-
-        // If thinking mode is enabled, prepend a subtle directive if not already included
-        if enableThinkingMode && !chatViewModel.messageText.contains("Think step by step") {
-            // The system prompt handles instructions, but we can ensure conversation settings are aligned
-        }
-
         chatViewModel.sendMessage(in: modelContext)
     }
 
@@ -530,7 +473,7 @@ struct ChatDetailView: View {
     }
 }
 
-// MARK: - Glassmorphic Message Row
+// MARK: - Message Row View (Pure Liquid Glass)
 
 private struct MessageRowView: View {
     let message: Message
@@ -553,37 +496,28 @@ private struct MessageRowView: View {
                     if isAssistant {
                         Image(systemName: "apple.intelligence")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.9))
+                            .foregroundStyle(.white.opacity(0.95))
                         Text("Locally")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(.white.opacity(0.9))
                     } else {
                         Text("You")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(.white.opacity(0.9))
                     }
                     Text(message.timestamp, format: .dateTime.hour().minute())
                         .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.white.opacity(0.6))
                 }
 
-                // Bubble
+                // Bubble using Liquid Glass
                 Text(message.content)
                     .font(.system(size: 14))
                     .foregroundStyle(.white)
                     .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(
-                        isAssistant
-                            ? Color.black.opacity(0.35)
-                            : Color.white.opacity(0.18)
-                    )
-                    .clipShape(.rect(cornerRadius: 16))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(.white.opacity(0.08), lineWidth: 1)
-                    )
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .liquidGlass(.rect(cornerRadius: 18), isClear: !isAssistant)
 
                 // Assistant action buttons (Copy & TTS)
                 if isAssistant && !message.content.isEmpty {
@@ -596,7 +530,7 @@ private struct MessageRowView: View {
                                 Text(copied ? "Copied" : "Copy")
                             }
                             .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(.white.opacity(0.75))
                         }
                         .buttonStyle(.plain)
 
@@ -612,7 +546,7 @@ private struct MessageRowView: View {
                                 Text(tts.speakingMessageID == message.id ? "Stop" : "Read Aloud")
                             }
                             .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(.white.opacity(0.75))
                         }
                         .buttonStyle(.plain)
                     }
