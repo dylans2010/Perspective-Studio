@@ -448,6 +448,16 @@ public final class AntigravityAgentHarness {
             }
         }
 
+        // Model compatibility, stated before the task loop starts: a
+        // constrained model on the text tool-call protocol (e.g. a
+        // 0.5B instruct model) gets a visible warning in the run trace
+        // instead of silently attempting autonomous execution it cannot
+        // reliably perform. The loop's guards still apply unchanged;
+        // this is disclosure, not a block — and Chat mode never sees it.
+        if let advisory = ModelCapabilityProfile.profile(forModelID: targetModelID).agentModeAdvisory {
+            addStep(AgentStep(kind: .thought, title: "Model Capability Warning", detail: advisory))
+        }
+
         // 2. Prepare context & system instructions
         let assistContext = AssistContext(
             sessionId: UUID(),
@@ -461,6 +471,7 @@ public final class AntigravityAgentHarness {
         let systemPrompt = buildSystemPrompt(
             query: prompt,
             context: assistContext,
+            workspaceRoot: workspaceRoot,
             sdkStatus: sdkStatus,
             projectName: activeProject?.name,
             requireProjectTools: requireProjectTools,
@@ -583,7 +594,8 @@ public final class AntigravityAgentHarness {
             // This turn's reasoning, split out before classification: it
             // belongs in a thought step (and the outcome's thinking), not
             // in any answer text, whichever way the turn classifies.
-            let turnThinking = AntigravityLoopEngine.splitThinking(from: turnResponse).thinking
+            let turnSplit = AntigravityLoopEngine.splitThinking(from: turnResponse)
+            let turnThinking = turnSplit.thinking
             if let turnThinking, !turnThinking.isEmpty {
                 accumulatedThinking.append(turnThinking)
                 addStep(AgentStep(kind: .thought, title: "Thinking", detail: turnThinking))
@@ -592,7 +604,14 @@ public final class AntigravityAgentHarness {
             // 4. Classify the turn with the loop engine. Tool turns are
             // consumed entirely by the loop: their text (which contains the
             // raw invocation) is never forwarded to the chat as a message.
-            switch AntigravityLoopEngine.decide(turnText: turnResponse, catalog: catalog) {
+            // Classification runs on the ANSWER portion only — never on
+            // the raw turn. The raw turn includes the model's reasoning,
+            // and a call merely *considered* inside <thinking> ("maybe I
+            // should TOOL_CALL …") is not a call the model made: deciding
+            // on the raw text could execute an action the model only
+            // thought about. (The direct-turn path already decided on
+            // the split answer; the loop now matches it.)
+            switch AntigravityLoopEngine.decide(turnText: turnSplit.answer, catalog: catalog) {
             case .callTool(let toolId, let codableArgs):
                 // A cancelled or expired run dispatches NOTHING further,
                 // however the model turn classified: cancellation is
@@ -901,6 +920,7 @@ public final class AntigravityAgentHarness {
     private func buildSystemPrompt(
         query: String,
         context: AssistContext,
+        workspaceRoot: URL,
         sdkStatus: AntigravitySDKBundle.Status,
         projectName: String?,
         requireProjectTools: Bool,
@@ -934,6 +954,12 @@ public final class AntigravityAgentHarness {
 
         \(AntigravitySDKBundle.agentModeContextLine(status: sdkStatus))
         \(computerUseLine)
+
+        ## Workspace — where file actions happen:
+        - This run's workspace folder is: \(workspaceRoot.path)
+        - Relative paths in tool arguments resolve inside that folder. "This directory", "the current directory", and "here" in the user's request mean exactly that folder — nowhere else.
+        - To create a file the user named with a plain filename (for example `main.swift`) in "this directory", call the file-creation tool with that filename as its path argument and the file's full content. Do not invent a different folder, and do not describe a shell or debugger command instead — no such capability exists here.
+        - When you create or change files, say in your final answer which folder they are in, in plain language.
 
         ## Core Operational Guidelines:
         1. When a task requires external data, system verification, or computation, use the available tools.

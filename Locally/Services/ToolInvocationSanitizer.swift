@@ -44,7 +44,56 @@ public enum ToolInvocationSanitizer {
         let stripped = stripInvocations(from: text, knownToolIDs: knownToolIDs)
         let markersRemoved = stripInternalMarkers(from: stripped)
         let redacted = redactToolIdentifiers(in: markersRemoved, knownToolIDs: knownToolIDs)
-        return collapseBlankSpace(redacted)
+        // Stripping an invocation that sat inside a fenced block leaves
+        // an EMPTY fence behind (```json … ``` with nothing between the
+        // fences) — the exact "one comment followed by several empty
+        // code blocks" artifact in the Agent screenshots. Empty fences
+        // carry no content and are removed; fences with real code are
+        // untouched.
+        let fencesCleaned = stripEmptyCodeFences(in: redacted)
+        return collapseBlankSpace(fencesCleaned)
+    }
+
+    /// Removes fenced code blocks that contain nothing but whitespace
+    /// (an optional language tag rides on the opening fence line itself).
+    /// A block with any non-whitespace content is preserved verbatim,
+    /// as is an unterminated fence that has content. An unterminated
+    /// fence with no content at all is dropped — it can only be the
+    /// husk of a stripped invocation.
+    public nonisolated static func stripEmptyCodeFences(in text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var kept: [String] = []
+        var index = 0
+        while index < lines.count {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("```") else {
+                kept.append(lines[index])
+                index += 1
+                continue
+            }
+            // Opening fence: find its closing fence.
+            var close = index + 1
+            while close < lines.count, !lines[close].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                close += 1
+            }
+            if close >= lines.count {
+                // Unterminated: keep it only if real content follows.
+                let tail = lines[(index + 1)...]
+                if tail.contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                    kept.append(contentsOf: lines[index...])
+                }
+                break
+            }
+            let body = lines[(index + 1)..<close]
+            if body.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                // Empty block: drop opening fence, body, and closing fence.
+                index = close + 1
+            } else {
+                kept.append(contentsOf: lines[index...close])
+                index = close + 1
+            }
+        }
+        return kept.joined(separator: "\n")
     }
 
     // MARK: - Internal loop markers (defense in depth)

@@ -103,6 +103,25 @@ public struct ModelCapabilityProfile: Sendable, Equatable {
     /// trusted with the same latitude as a large model.
     public var toolCallingIsReliable: Bool { !isConstrained && toolCalling != .unknown }
 
+    /// A plain-language Agent-mode compatibility warning for this
+    /// profile, or nil when the model can be trusted with the agent
+    /// loop as-is. The harness surfaces this in the run trace before a
+    /// task run starts, so a user running a very small model (for
+    /// example a 0.5B instruct model on the `TOOL_CALL` text protocol)
+    /// is told up front that tool calling may be unreliable — instead
+    /// of discovering it from a fabricated command or a run that never
+    /// executes anything. Chat mode never shows this: chat stays fully
+    /// usable on every model.
+    public var agentModeAdvisory: String? {
+        if toolCalling == .unknown {
+            return "This model's tool-calling support is unknown, so Agent mode may not be able to carry out actions reliably. Chat mode is unaffected."
+        }
+        if isConstrained {
+            return "This is a small model using the text tool-call protocol: Agent mode can attempt tool-based tasks, but its tool calling is unreliable — it may need corrections, and a task it cannot perform will be reported as not done rather than faked. A larger model will handle Agent mode more reliably. Chat mode is unaffected."
+        }
+        return nil
+    }
+
     // MARK: - Derivation
 
     /// The built-in Apple model: native (bridged) tool calling, ~4K

@@ -50,15 +50,32 @@ enum ToolCallingService {
             }
             steps.append(ToolRunStep(title: "Model requested \(ToolNameFormatter.format(call.toolID))", detail: "\(call.arguments)"))
 
-            guard let definition = ToolRegistry.shared.definition(for: call.toolID) else {
+            // The same validation gate the agent loop uses: identity is
+            // resolved against the registered catalog and arguments are
+            // checked against the tool's schema BEFORE anything is
+            // confirmed or dispatched. This path used to look the id up
+            // directly and execute string arguments unvalidated — a
+            // second, weaker pipeline next to the authoritative one.
+            let catalog = ToolCatalog(tools: ToolsRegistry.shared.allTools)
+            let codableArgs = call.arguments.mapValues { AnyCodableValue(any: $0) }
+            let validated: ValidatedToolCall
+            switch ToolCallValidator.validate(toolID: call.toolID, arguments: codableArgs, catalog: catalog) {
+            case .accepted(let call):
+                validated = call
+            case .rejected(let rejection):
+                steps.append(ToolRunStep(title: "Action Not Executed", detail: rejection.userFacingSummary))
+                return .failed(rejection.userFacingSummary, steps: steps)
+            }
+
+            guard let definition = ToolRegistry.shared.definition(for: validated.toolID) else {
                 return .failed("The model requested an action the agent does not have, so nothing was executed.", steps: steps)
             }
-            if definition.requiresConfirmation && !confirmedToolIDs.contains(call.toolID) {
-                return .needsConfirmation(toolID: call.toolID, arguments: call.arguments, steps: steps)
+            if definition.requiresConfirmation && !confirmedToolIDs.contains(validated.toolID) {
+                return .needsConfirmation(toolID: validated.toolID, arguments: call.arguments, steps: steps)
             }
 
             let result = try await ToolRegistry.shared.execute(
-                toolID: call.toolID,
+                toolID: validated.toolID,
                 arguments: call.arguments,
                 confirmed: true
             )
@@ -74,49 +91,31 @@ enum ToolCallingService {
         }
     }
 
-    /// Extracts and validates the JSON payload of a `TOOL_CALL` line.
-    /// Returns nil when the model did not request a tool.
+    /// Extracts the JSON payload of a `TOOL_CALL` line, using the ONE
+    /// authoritative decoder (`AntigravityAgentHarness.parseToolCall` —
+    /// the same parser the agent loop's `AntigravityLoopEngine.decide`
+    /// consumes). This service used to carry its own copy of the marker
+    /// scan and balanced-brace walk; two decoders meant two definitions
+    /// of what a call is, and fixes landed in one and not the other.
+    ///
+    /// Returns nil when the model did not request a tool. Argument values
+    /// are flattened to strings for this service's legacy execute path;
+    /// a non-scalar argument value rejects the parse outright (the
+    /// caller reports that nothing was executed) — full structured
+    /// arguments are the agent loop's channel, validated by
+    /// `ToolCallValidator` in `run` above before dispatch either way.
     nonisolated static func parseToolCall(in text: String) -> (toolID: String, arguments: [String: String])? {
-        guard let marker = text.range(of: "TOOL_CALL") else { return nil }
-        let remainder = text[marker.upperBound...]
-        guard let start = remainder.firstIndex(of: "{"),
-              let data = balancedJSON(in: remainder[start...]),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let toolID = object["tool"] as? String else { return nil }
+        guard let parsed = AntigravityAgentHarness.parseToolCall(in: text) else { return nil }
         var arguments: [String: String] = [:]
-        if let rawArgs = object["arguments"] as? [String: Any] {
-            for (key, value) in rawArgs {
-                if let string = value as? String {
-                    arguments[key] = string
-                } else if let number = value as? NSNumber {
-                    arguments[key] = number.stringValue
-                } else {
-                    return nil // Non-scalar arguments are rejected outright.
-                }
+        for (key, value) in parsed.arguments {
+            if let string = value as? String {
+                arguments[key] = string
+            } else if let number = value as? NSNumber {
+                arguments[key] = number.stringValue
+            } else {
+                return nil // Non-scalar arguments are rejected outright.
             }
         }
-        return (toolID, arguments)
-    }
-
-    /// Finds the balanced `{...}` JSON object at the start of `text`.
-    private nonisolated static func balancedJSON(in text: Substring) -> Data? {
-        var depth = 0
-        var inString = false
-        var escaped = false
-        for (offset, char) in text.enumerated() {
-            if escaped { escaped = false; continue }
-            if char == "\\" && inString { escaped = true; continue }
-            if char == "\"" { inString.toggle(); continue }
-            if inString { continue }
-            if char == "{" { depth += 1 }
-            if char == "}" {
-                depth -= 1
-                if depth == 0 {
-                    let end = text.index(text.startIndex, offsetBy: offset + 1)
-                    return Data(text[text.startIndex..<end].utf8)
-                }
-            }
-        }
-        return nil
+        return (parsed.toolId, arguments)
     }
 }
