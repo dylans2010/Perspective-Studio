@@ -30,6 +30,10 @@ public enum ComputerUseError: Error, Sendable {
     case cancelled
     /// Computer Use requires macOS; this build is running elsewhere.
     case platformUnavailable
+    /// The user has not turned Computer Use on in Settings (or has
+    /// turned it off). Distinct from a missing macOS permission: the
+    /// fix is the Settings > Computer Use toggle, not a TCC pane.
+    case featureDisabled
 
     public var message: String {
         switch self {
@@ -54,6 +58,8 @@ public enum ComputerUseError: Error, Sendable {
             return "The Computer Use operation was cancelled. No further actions were dispatched."
         case .platformUnavailable:
             return "Computer Use is only available on macOS."
+        case .featureDisabled:
+            return "Computer Use is turned off. The user can enable it in Locally Settings > Computer Use. Until then, no computer_* tool (other than computer_get_permissions) will run."
         }
     }
 
@@ -62,7 +68,7 @@ public enum ComputerUseError: Error, Sendable {
         case .permissionDenied: return .permissionDenied
         case .invalidArgument: return .invalidInput
         case .notFound, .ambiguous: return .notFound
-        case .unsupported, .platformUnavailable: return .unsupportedOperation
+        case .unsupported, .platformUnavailable, .featureDisabled: return .unsupportedOperation
         case .staleOrInvalidTarget: return .invalidInput
         case .executionFailed: return .executionFailed
         case .timedOut: return .timeout
@@ -92,6 +98,8 @@ public enum ComputerUseError: Error, Sendable {
             return "Stop the workflow and report what was already executed."
         case .platformUnavailable:
             return "Run Locally on macOS to use Computer Use."
+        case .featureDisabled:
+            return "Tell the user Computer Use is off and where the switch is (Settings > Computer Use). Do not retry any computer_* action until they turn it on."
         }
     }
 

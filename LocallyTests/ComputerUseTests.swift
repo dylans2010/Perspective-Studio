@@ -252,21 +252,84 @@ final class ComputerUseTests: XCTestCase {
     // MARK: - Wait tool bounds (no live desktop needed)
 
     func testWaitToolRejectsUnboundedWaits() async throws {
-        let context = AssistContext()
-        let tooLong = try await ComputerWaitTool().execute(input: ["seconds": 120], context: context)
-        XCTAssertFalse(tooLong.success)
-        let missing = try await ComputerWaitTool().execute(input: [:], context: context)
-        XCTAssertFalse(missing.success)
-        let badCondition = try await ComputerWaitTool().execute(input: ["condition": "nonsense", "timeoutSeconds": 1], context: context)
-        XCTAssertFalse(badCondition.success)
+        try await withComputerUseEnabled(true) {
+            let context = AssistContext()
+            let tooLong = try await ComputerWaitTool().execute(input: ["seconds": 120], context: context)
+            XCTAssertFalse(tooLong.success)
+            let missing = try await ComputerWaitTool().execute(input: [:], context: context)
+            XCTAssertFalse(missing.success)
+            let badCondition = try await ComputerWaitTool().execute(input: ["condition": "nonsense", "timeoutSeconds": 1], context: context)
+            XCTAssertFalse(badCondition.success)
+        }
+    }
+
+    // MARK: - Master switch (Settings > Computer Use)
+
+    /// Runs `body` with the Computer Use switch set, restoring
+    /// whatever the user (or a previous test) had afterwards.
+    private func withComputerUseEnabled<T>(_ enabled: Bool, _ body: () async throws -> T) async rethrows -> T {
+        let defaults = UserDefaults.standard
+        let old = defaults.object(forKey: ComputerUseSettings.enabledKey)
+        defaults.set(enabled, forKey: ComputerUseSettings.enabledKey)
+        defer {
+            if let old {
+                defaults.set(old, forKey: ComputerUseSettings.enabledKey)
+            } else {
+                defaults.removeObject(forKey: ComputerUseSettings.enabledKey)
+            }
+        }
+        return try await body()
+    }
+
+    func testGateBlocksEverythingExceptPermissionsWhenDisabled() async throws {
+        try await withComputerUseEnabled(false) {
+            XCTAssertFalse(ComputerUseSettings.isEnabled)
+            let blocked = ComputerUseService.gate(toolID: "computer_open_application", input: [:], permissions: [])
+            XCTAssertNotNil(blocked)
+            XCTAssertFalse(blocked?.success ?? true)
+            XCTAssertTrue(blocked?.output.localizedCaseInsensitiveContains("turned off") == true)
+            let screenshotBlocked = ComputerUseService.gate(toolID: "computer_screenshot", input: [:], permissions: [.screenRecording])
+            XCTAssertNotNil(screenshotBlocked)
+            // The permissions/status tool stays available while off,
+            // so the model can explain how to turn the feature on.
+            let exempt = ComputerUseService.gate(toolID: "computer_get_permissions", input: [:], permissions: [])
+            XCTAssertNil(exempt)
+            // And a gated tool refuses end-to-end, not just in gate().
+            let result = try await ComputerMouseClickTool().execute(input: ["x": 10, "y": 10], context: AssistContext())
+            XCTAssertFalse(result.success)
+        }
+    }
+
+    func testGatePassesWhenEnabled() async throws {
+        try await withComputerUseEnabled(true) {
+            XCTAssertTrue(ComputerUseSettings.isEnabled)
+            // A tool needing no macOS permission passes the gate.
+            let open = ComputerUseService.gate(toolID: "computer_open_application", input: [:], permissions: [])
+            XCTAssertNil(open)
+        }
+    }
+
+    func testGetPermissionsReportsMasterSwitchState() async throws {
+        try await withComputerUseEnabled(false) {
+            let result = try await ComputerGetPermissionsTool().execute(input: [:], context: AssistContext())
+            XCTAssertTrue(result.success, result.output)
+            XCTAssertEqual(result.data?["computerUseEnabled"], "false")
+        }
+        try await withComputerUseEnabled(true) {
+            let result = try await ComputerGetPermissionsTool().execute(input: [:], context: AssistContext())
+            XCTAssertTrue(result.success, result.output)
+            XCTAssertEqual(result.data?["computerUseEnabled"], "true")
+        }
     }
 
     // MARK: - Live observation (this Mac only)
 
     @MainActor
     func testScreenInfoToolReturnsRealDisplays() async throws {
-        let result = try await ComputerGetScreenInfoTool().execute(input: [:], context: AssistContext())
-        XCTAssertTrue(result.success, result.output)
-        XCTAssertFalse((result.data?["displays"] ?? "").isEmpty)
+        try await withComputerUseEnabled(true) {
+            let result = try await ComputerGetScreenInfoTool().execute(input: [:], context: AssistContext())
+            XCTAssertTrue(result.success, result.output)
+            XCTAssertFalse((result.data?["displays"] ?? "").isEmpty)
+        }
     }
 }

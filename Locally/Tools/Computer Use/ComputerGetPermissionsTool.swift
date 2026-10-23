@@ -65,7 +65,12 @@ public struct ComputerGetPermissionsTool: AssistTool {
         for status in statuses {
             data[status.kind == .accessibility ? "accessibility" : "screenRecording"] = status.state.rawValue
         }
-        let output = (notes + lines).joined(separator: "\n")
+        let enabled = ComputerUseSettings.isEnabled
+        data["computerUseEnabled"] = enabled ? "true" : "false"
+        let switchLine = enabled
+            ? "Computer Use master switch (Settings > Computer Use): ON."
+            : "Computer Use master switch (Settings > Computer Use): OFF — every other computer_* tool will refuse to run until the user turns it on there. This tool stays available so you can report that."
+        let output = (notes + [switchLine] + lines).joined(separator: "\n")
         return ComputerUseService.success(output, data: data)
         #endif
     }

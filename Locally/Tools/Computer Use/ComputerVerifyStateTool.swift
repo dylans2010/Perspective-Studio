@@ -37,6 +37,9 @@ public struct ComputerVerifyStateTool: AssistTool {
     public var requiredPermission: ToolPermissionRequirement { .accessibility }
 
     public func execute(input: [String: Any], context: AssistContext) async throws -> AssistToolResult {
+        if let gate = ComputerUseService.gate(toolID: id, input: input, permissions: []) {
+            return gate
+        }
         #if !os(macOS)
         return ComputerUseError.platformUnavailable.result
         #else

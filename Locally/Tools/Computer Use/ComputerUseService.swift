@@ -29,6 +29,12 @@ public enum ComputerUseService {
         #if !os(macOS)
         return ComputerUseError.platformUnavailable.result
         #else
+        // Master switch (Settings > Computer Use). Everything is
+        // blocked while it is off except computer_get_permissions,
+        // which exists precisely to report status like this.
+        if toolID != "computer_get_permissions" && !ComputerUseSettings.isEnabled {
+            return ComputerUseSettings.disabledFailure
+        }
         if Task.isCancelled { return ComputerUseError.cancelled.result }
         if let error = ComputerUseSafety.validate(toolID: toolID, input: input) {
             return error.result

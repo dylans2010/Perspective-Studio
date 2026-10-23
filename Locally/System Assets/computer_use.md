@@ -74,9 +74,11 @@ Preference order for interacting with UI, most reliable first:
 
 If a model cannot view images, it must not pretend to: use accessibility first, OCR second, and say plainly that the screenshot itself could not be seen.
 
-## 6. Permissions
+## 6. Permissions and the Master Switch
 
-Two macOS permissions gate Computer Use, and tools check them centrally before acting:
+Computer Use has a master switch in **Settings > Computer Use**, and it is **off by default**. While it is off, every `computer_*` tool except `computer_get_permissions` refuses to run with a `featureDisabled` error — do not retry; tell the user where the switch is and wait for them to turn it on. `computer_get_permissions` reports the switch state (as `computerUseEnabled`) alongside the permissions.
+
+Two macOS permissions also gate Computer Use, and tools check them centrally before acting:
 
 - **Accessibility** — needed for accessibility trees/actions, window operations, and sending mouse/keyboard input to other apps.
 - **Screen Recording** — needed for screenshots, OCR, and CG window titles.
