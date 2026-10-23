@@ -13,6 +13,15 @@ actor LLMService {
     private var isCancelled = false
     private var isVLM = false
     private var isLoading = false
+    private var currentModelID: String?
+
+    func currentlyLoadedModelID() -> String? {
+        currentModelID
+    }
+
+    func isLoaded() -> Bool {
+        modelContainer != nil
+    }
 
     func loadModelByID(_ id: String, isVideoModel: Bool = false) throws -> AsyncThrowingStream<Double, Error> {
         // Guard against reentrancy — cancel any in-flight load
@@ -26,6 +35,7 @@ actor LLMService {
         // Unload previous model to free memory before loading new one
         modelContainer = nil
         chatSession = nil
+        currentModelID = nil
 
         return AsyncThrowingStream { continuation in
             Task {
@@ -43,11 +53,41 @@ actor LLMService {
                     }
                     self.modelContainer = container
                     self.chatSession = ChatSession(container)
+                    self.currentModelID = id
                     self.isLoading = false
                     continuation.finish()
                 } catch {
                     self.isLoading = false
+                    self.currentModelID = nil
                     continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    func generateSinglePrompt(
+        prompt: String,
+        systemPrompt: String? = nil,
+        temperature: Double? = nil
+    ) throws -> AsyncStream<String> {
+        guard let container = modelContainer else {
+            throw LLMError.modelNotLoaded
+        }
+
+        let session = ChatSession(container)
+        isCancelled = false
+
+        return AsyncStream { continuation in
+            Task {
+                do {
+                    let stream = session.streamResponse(to: prompt, images: [], videos: [])
+                    for try await token in stream {
+                        if self.isCancelled { break }
+                        continuation.yield(token)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish()
                 }
             }
         }
@@ -123,6 +163,7 @@ actor LLMService {
     func unloadModel() {
         modelContainer = nil
         chatSession = nil
+        currentModelID = nil
         isVLM = false
         isLoading = false
     }
@@ -151,6 +192,17 @@ actor LLMService {
     }
 
     func summarize(prompt: String) async throws -> String {
+        throw LLMError.modelNotLoaded
+    }
+
+    func currentlyLoadedModelID() -> String? { nil }
+    func isLoaded() -> Bool { false }
+
+    func generateSinglePrompt(
+        prompt: String,
+        systemPrompt: String? = nil,
+        temperature: Double? = nil
+    ) throws -> AsyncStream<String> {
         throw LLMError.modelNotLoaded
     }
 

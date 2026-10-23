@@ -4,6 +4,7 @@ import SwiftData
 struct ChatView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var chatViewModel: ChatViewModel
+    var isSidebarCollapsed: Bool = false
     var onToggleSidebar: (() -> Void)? = nil
     var onOpenSettings: (() -> Void)? = nil
 
@@ -12,6 +13,7 @@ struct ChatView: View {
             ChatDetailView(
                 conversation: conversation,
                 chatViewModel: chatViewModel,
+                isSidebarCollapsed: isSidebarCollapsed,
                 onToggleSidebar: onToggleSidebar,
                 onOpenSettings: onOpenSettings
             )
@@ -19,6 +21,7 @@ struct ChatView: View {
             // If no conversation is selected, automatically create or present draft
             DraftChatContainerView(
                 chatViewModel: chatViewModel,
+                isSidebarCollapsed: isSidebarCollapsed,
                 onToggleSidebar: onToggleSidebar,
                 onOpenSettings: onOpenSettings
             )
@@ -29,6 +32,7 @@ struct ChatView: View {
 private struct DraftChatContainerView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var chatViewModel: ChatViewModel
+    var isSidebarCollapsed: Bool = false
     var onToggleSidebar: (() -> Void)? = nil
     var onOpenSettings: (() -> Void)? = nil
 

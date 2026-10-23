@@ -17,6 +17,7 @@ struct ChatDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let conversation: Conversation
     @Bindable var chatViewModel: ChatViewModel
+    var isSidebarCollapsed: Bool = false
     var onToggleSidebar: (() -> Void)? = nil
     var onOpenSettings: (() -> Void)? = nil
 
@@ -75,7 +76,7 @@ struct ChatDetailView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Top floating controls matching Image 2 (Center Model Selector, Trailing New Chat)
+                // Top floating controls matching Image 1 & 2 (Level with traffic lights, Center Model Selector, Trailing New Chat)
                 topControlBar
 
                 // Main content: either welcome hero + suggestion cards or active message stream
@@ -105,31 +106,68 @@ struct ChatDetailView: View {
         }
     }
 
-    // MARK: - Top Control Bar (Exact Image 2)
+    // MARK: - Top Control Bar (Exact Image 1 Parity)
 
     private var topControlBar: some View {
-        HStack {
-            Spacer()
-
+        ZStack {
+            // Center element is mathematically centered in the entire view width
             modelSelectorPill
 
-            Spacer()
+            // Leading and Trailing items
+            HStack(spacing: 8) {
+                if isSidebarCollapsed {
+                    // Reserved space for macOS traffic lights
+                    Spacer()
+                        .frame(width: 72)
 
-            Button {
-                createNewChat()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(width: 36, height: 36)
-                    .liquidGlass(.circle)
+                    if let onOpenSettings {
+                        Button {
+                            onOpenSettings()
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .frame(width: 32, height: 32)
+                                .liquidGlass(.circle)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Settings")
+                    }
+
+                    if let onToggleSidebar {
+                        Button {
+                            onToggleSidebar()
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .frame(width: 32, height: 32)
+                                .liquidGlass(.circle)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show Sidebar")
+                    }
+                }
+
+                Spacer()
+
+                Button {
+                    createNewChat()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 32, height: 32)
+                        .liquidGlass(.circle)
+                }
+                .buttonStyle(.plain)
+                .help("New Chat (⌘N)")
             }
-            .buttonStyle(.plain)
-            .help("New Chat (⌘N)")
         }
-        .padding(.horizontal, 20)
+        .frame(height: 36)
+        .padding(.horizontal, 16)
         .padding(.top, 14)
-        .padding(.bottom, 4)
+        .padding(.bottom, 6)
     }
 
     // MARK: - Model Selector Pill (Pure Liquid Glass)

@@ -21,6 +21,8 @@ struct ContentView: View {
 
 enum SidebarTab: String, CaseIterable, Identifiable {
     case chat
+    case compare
+    case apiServer
     case downloads
     case settings
 
@@ -29,6 +31,8 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .chat: "Chat"
+        case .compare: "Compare"
+        case .apiServer: "Local API"
         case .downloads: "Downloads"
         case .settings: "Settings"
         }
@@ -37,6 +41,8 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .chat: "bubble.left.and.bubble.right.fill"
+        case .compare: "square.split.2x1"
+        case .apiServer: "server.rack"
         case .downloads: "arrow.down.circle.fill"
         case .settings: "gearshape.fill"
         }
@@ -45,16 +51,20 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     var shortcutNumber: Int {
         switch self {
         case .chat: 1
-        case .downloads: 2
-        case .settings: 3
+        case .compare: 2
+        case .apiServer: 3
+        case .downloads: 4
+        case .settings: 5
         }
     }
 
     var keyEquivalent: KeyEquivalent {
         switch self {
         case .chat: "1"
-        case .downloads: "2"
-        case .settings: "3"
+        case .compare: "2"
+        case .apiServer: "3"
+        case .downloads: "4"
+        case .settings: "5"
         }
     }
 }
@@ -75,10 +85,14 @@ struct MainView: View {
                 onOpenDownloads: {
                     selectedTab = .downloads
                 },
-                onToggleSidebar: {
-                    withAnimation {
-                        columnVisibility = (columnVisibility == .detailOnly) ? .all : .detailOnly
-                    }
+                onOpenCompare: {
+                    selectedTab = .compare
+                },
+                onOpenAPIServer: {
+                    selectedTab = .apiServer
+                },
+                onBackToChat: {
+                    selectedTab = .chat
                 },
                 onNewChat: {
                     selectedTab = .chat
@@ -94,6 +108,7 @@ struct MainView: View {
             case .chat:
                 ChatView(
                     chatViewModel: chatViewModel,
+                    isSidebarCollapsed: columnVisibility == .detailOnly,
                     onToggleSidebar: {
                         withAnimation {
                             columnVisibility = (columnVisibility == .detailOnly) ? .all : .detailOnly
@@ -103,6 +118,10 @@ struct MainView: View {
                         selectedTab = .settings
                     }
                 )
+            case .compare:
+                ModelComparisonView(chatViewModel: chatViewModel, onClose: { selectedTab = .chat })
+            case .apiServer:
+                LocalAPIServerView(chatViewModel: chatViewModel, onClose: { selectedTab = .chat })
             case .downloads:
                 DownloadsView(chatViewModel: chatViewModel, onClose: { selectedTab = .chat })
             case .settings:

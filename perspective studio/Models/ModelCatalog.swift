@@ -74,322 +74,350 @@ struct ModelFamily: Identifiable, Sendable, Hashable {
     }
 }
 
+@Observable
+@MainActor
+final class ModelCatalog {
+    static let shared = ModelCatalog()
+
+    var families: [ModelFamily] = []
+    var isLoading: Bool = false
+    var lastError: String? = nil
+
+    init() {
+        // Initialize with default template families and trigger API fetch
+        self.families = Self.initialSeedFamilies()
+        Task {
+            await fetchCatalogFromAPI()
+        }
+    }
+
+    func fetchCatalogFromAPI(forceRefresh: Bool = false) async {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let hfModels = try await HuggingFaceService.shared.fetchMLXModels(forceRefresh: forceRefresh)
+            let built = Self.buildFamiliesFromAPI(models: hfModels)
+            if !built.isEmpty {
+                self.families = built
+            }
+        } catch {
+            self.lastError = error.localizedDescription
+            if self.families.isEmpty {
+                self.families = Self.initialSeedFamilies()
+            }
+        }
+    }
+
+    // MARK: - Dynamic API Builder
+
+    static func buildFamiliesFromAPI(models: [HFModel]) -> [ModelFamily] {
+        // Family definitions mapped to detection patterns
+        struct FamilyDefinition {
+            let id: String
+            let name: String
+            let icon: String
+            let provider: ModelProvider
+            let description: String
+            let defaultBadges: [ModelCatalogBadge]
+            let keywords: [String]
+        }
+
+        let definitions: [FamilyDefinition] = [
+            FamilyDefinition(
+                id: "qwen",
+                name: "Qwen",
+                icon: "sparkle",
+                provider: .qwen,
+                description: "State-of-the-art multilingual and reasoning models by Alibaba Cloud.",
+                defaultBadges: [.new, .thinking, .code],
+                keywords: ["qwen", "qwq"]
+            ),
+            FamilyDefinition(
+                id: "gemma",
+                name: "Gemma 4",
+                icon: "diamond.fill",
+                provider: .gemma,
+                description: "Open models built from Google DeepMind Gemini research and technology.",
+                defaultBadges: [.new, .thinking, .vision],
+                keywords: ["gemma", "paligemma"]
+            ),
+            FamilyDefinition(
+                id: "lfm",
+                name: "LFM 2.5",
+                icon: "drop.fill",
+                provider: .other,
+                description: "Next-gen hybrid neural network models developed by Liquid AI for on-device deployment.",
+                defaultBadges: [.new, .vision, .recommended],
+                keywords: ["lfm", "liquid"]
+            ),
+            FamilyDefinition(
+                id: "minicpm",
+                name: "MiniCPM 5",
+                icon: "cube.fill",
+                provider: .other,
+                description: "Efficient on-device models by OpenBMB optimized for language and multimodal tasks.",
+                defaultBadges: [.new, .thinking],
+                keywords: ["minicpm"]
+            ),
+            FamilyDefinition(
+                id: "deepseek",
+                name: "DeepSeek R1",
+                icon: "brain.head.profile",
+                provider: .deepseek,
+                description: "High-capability reasoning and coding models with advanced chain-of-thought distillation.",
+                defaultBadges: [.thinking, .code, .recommended],
+                keywords: ["deepseek", "r1"]
+            ),
+            FamilyDefinition(
+                id: "mistral",
+                name: "Mistral",
+                icon: "wind",
+                provider: .mistral,
+                description: "High-performance European open weights engineered for reasoning, code, and speed.",
+                defaultBadges: [.code, .recommended],
+                keywords: ["mistral", "mixtral", "codestral", "pixtral"]
+            ),
+            FamilyDefinition(
+                id: "llama",
+                name: "Llama 3.3",
+                icon: "flame.fill",
+                provider: .llama,
+                description: "Meta's flagship open-weights architecture with world-class instruction tuning.",
+                defaultBadges: [.tools, .recommended],
+                keywords: ["llama"]
+            ),
+            FamilyDefinition(
+                id: "phi",
+                name: "Microsoft Phi",
+                icon: "apple.terminal",
+                provider: .phi,
+                description: "Ultra-compact small language models trained on synthetic textbooks and reasoning datasets.",
+                defaultBadges: [.thinking, .code],
+                keywords: ["phi"]
+            ),
+            FamilyDefinition(
+                id: "bonsai",
+                name: "Bonsai",
+                icon: "leaf.fill",
+                provider: .other,
+                description: "Ultra-efficient models from PrismML tuned for real-time edge processing.",
+                defaultBadges: [.new, .thinking, .vision],
+                keywords: ["bonsai"]
+            )
+        ]
+
+        var result: [ModelFamily] = []
+
+        for def in definitions {
+            // Filter all HF models matching keywords
+            let matchedModels = models.filter { model in
+                let lower = model.displayName.lowercased()
+                return def.keywords.contains { kw in lower.contains(kw) }
+            }
+
+            guard !matchedModels.isEmpty else { continue }
+
+            // Transform HFModel records into dynamic ModelCatalogVariant
+            let variants: [ModelCatalogVariant] = matchedModels.prefix(12).map { model in
+                let name = model.displayName
+                let (sizeStr, ramStr) = estimateSizeAndRAM(from: name)
+                let badges = deriveBadges(from: model, defaultBadges: def.defaultBadges)
+                let desc = generateDescription(for: name, pipeline: model.pipelineTag)
+
+                return ModelCatalogVariant(
+                    id: model.id,
+                    name: formatVariantName(model.id),
+                    description: desc,
+                    sizeFormatted: sizeStr,
+                    ramFormatted: ramStr,
+                    badges: badges,
+                    rawModel: model
+                )
+            }
+
+            let familyBadges = Array(Set(variants.flatMap { $0.badges })).sorted { $0.title < $1.title }
+
+            result.append(
+                ModelFamily(
+                    id: def.id,
+                    name: def.name,
+                    icon: def.icon,
+                    provider: def.provider,
+                    description: def.description,
+                    badges: familyBadges.isEmpty ? def.defaultBadges : familyBadges,
+                    variants: variants
+                )
+            )
+        }
+
+        return result
+    }
+
+    private static func formatVariantName(_ id: String) -> String {
+        let clean = id.replacingOccurrences(of: "mlx-community/", with: "")
+        return clean.replacingOccurrences(of: "-", with: " ")
+    }
+
+    private static func estimateSizeAndRAM(from name: String) -> (String, String) {
+        let lower = name.lowercased()
+        if lower.contains("70b") || lower.contains("72b") {
+            return ("39.5 GB", "48.0 GB RAM")
+        } else if lower.contains("32b") || lower.contains("35b") {
+            return ("18.4 GB", "24.0 GB RAM")
+        } else if lower.contains("27b") {
+            return ("16.2 GB", "20.5 GB RAM")
+        } else if lower.contains("14b") {
+            return ("8.9 GB", "12.0 GB RAM")
+        } else if lower.contains("8b") || lower.contains("9b") {
+            return ("4.9 GB", "6.8 GB RAM")
+        } else if lower.contains("7b") {
+            return ("4.3 GB", "6.0 GB RAM")
+        } else if lower.contains("3b") || lower.contains("4b") {
+            return ("2.4 GB", "3.6 GB RAM")
+        } else if lower.contains("1.5b") || lower.contains("2b") {
+            return ("1.4 GB", "2.1 GB RAM")
+        } else if lower.contains("0.5b") || lower.contains("0.6b") || lower.contains("450m") {
+            return ("480 MB", "1.1 GB RAM")
+        }
+        return ("3.8 GB", "5.2 GB RAM")
+    }
+
+    private static func deriveBadges(from model: HFModel, defaultBadges: [ModelCatalogBadge]) -> [ModelCatalogBadge] {
+        var badges = Set<ModelCatalogBadge>()
+        let nameLower = model.displayName.lowercased()
+        let tagsLower = model.tags.map { $0.lowercased() }
+
+        if nameLower.contains("r1") || nameLower.contains("qwq") || nameLower.contains("think") || nameLower.contains("reason") {
+            badges.insert(.thinking)
+        }
+        if nameLower.contains("vl") || nameLower.contains("vision") || tagsLower.contains("image-text-to-text") {
+            badges.insert(.vision)
+        }
+        if nameLower.contains("coder") || nameLower.contains("code") || tagsLower.contains("code") {
+            badges.insert(.code)
+        }
+        if nameLower.contains("tool") || nameLower.contains("instruct") {
+            badges.insert(.tools)
+        }
+        if model.downloads > 5000 {
+            badges.insert(.recommended)
+        }
+        badges.insert(.new)
+
+        if badges.isEmpty {
+            return defaultBadges
+        }
+        return Array(badges)
+    }
+
+    private static func generateDescription(for name: String, pipeline: String?) -> String {
+        let lower = name.lowercased()
+        if lower.contains("vision") || lower.contains("vl") {
+            return "Vision-language model capable of analyzing images, documents, and answering visual questions."
+        } else if lower.contains("coder") || lower.contains("code") {
+            return "Specialized for programming, code completion, refactoring, and technical reasoning."
+        } else if lower.contains("r1") || lower.contains("qwq") || lower.contains("reason") {
+            return "Reasoning-tuned architecture with step-by-step thinking for math, logic, and deep analysis."
+        } else {
+            return "General-purpose instruction model for conversational chat, summarization, and task execution."
+        }
+    }
+
+    // Initial placeholder seeds while the HuggingFace API call resolves
+    private static func initialSeedFamilies() -> [ModelFamily] {
+        [
+            ModelFamily(
+                id: "qwen",
+                name: "Qwen",
+                icon: "sparkle",
+                provider: .qwen,
+                description: "State-of-the-art multilingual and reasoning models by Alibaba Cloud.",
+                badges: [.new, .thinking, .code],
+                variants: [
+                    ModelCatalogVariant(
+                        id: "mlx-community/Qwen2.5-7B-Instruct-4bit",
+                        name: "Qwen 2.5 7B Instruct",
+                        description: "High-accuracy open instruction model with strong coding, math, and multilingual abilities.",
+                        sizeFormatted: "4.3 GB",
+                        ramFormatted: "6.0 GB RAM",
+                        badges: [.new, .code, .recommended],
+                        rawModel: HFModel(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", name: "Qwen2.5-7B-Instruct-4bit", downloads: 54000, likes: 1200, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                    ),
+                    ModelCatalogVariant(
+                        id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
+                        name: "Qwen 2.5 Coder 7B",
+                        description: "Code intelligence specialist benchmarked against top-tier programming models.",
+                        sizeFormatted: "4.3 GB",
+                        ramFormatted: "6.0 GB RAM",
+                        badges: [.code, .tools],
+                        rawModel: HFModel(id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit", name: "Qwen2.5-Coder-7B-Instruct-4bit", downloads: 41000, likes: 980, tags: ["code"], pipelineTag: "text-generation", createdAt: nil)
+                    )
+                ]
+            ),
+            ModelFamily(
+                id: "gemma",
+                name: "Gemma 4",
+                icon: "diamond.fill",
+                provider: .gemma,
+                description: "Open models built from Google DeepMind Gemini research and technology.",
+                badges: [.new, .thinking, .vision],
+                variants: [
+                    ModelCatalogVariant(
+                        id: "mlx-community/gemma-2-2b-it-4bit",
+                        name: "Gemma 2 2B Instruct",
+                        description: "Lightweight conversational model with rapid latency on Apple Silicon.",
+                        sizeFormatted: "1.6 GB",
+                        ramFormatted: "2.1 GB RAM",
+                        badges: [.new, .recommended],
+                        rawModel: HFModel(id: "mlx-community/gemma-2-2b-it-4bit", name: "gemma-2-2b-it-4bit", downloads: 32000, likes: 850, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                    ),
+                    ModelCatalogVariant(
+                        id: "mlx-community/gemma-2-9b-it-4bit",
+                        name: "Gemma 2 9B Instruct",
+                        description: "Flagship Google open weights offering high factual precision.",
+                        sizeFormatted: "5.4 GB",
+                        ramFormatted: "7.2 GB RAM",
+                        badges: [.new, .thinking],
+                        rawModel: HFModel(id: "mlx-community/gemma-2-9b-it-4bit", name: "gemma-2-9b-it-4bit", downloads: 48000, likes: 1100, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                    )
+                ]
+            ),
+            ModelFamily(
+                id: "deepseek",
+                name: "DeepSeek R1",
+                icon: "brain.head.profile",
+                provider: .deepseek,
+                description: "High-capability reasoning and coding models with advanced chain-of-thought distillation.",
+                badges: [.thinking, .code, .recommended],
+                variants: [
+                    ModelCatalogVariant(
+                        id: "mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit",
+                        name: "DeepSeek R1 Distill Qwen 7B",
+                        description: "Reasoning distilled model that explores deep analytical steps before concluding.",
+                        sizeFormatted: "4.4 GB",
+                        ramFormatted: "6.2 GB RAM",
+                        badges: [.thinking, .recommended],
+                        rawModel: HFModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit", name: "DeepSeek-R1-Distill-Qwen-7B-4bit", downloads: 98000, likes: 3200, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                    ),
+                    ModelCatalogVariant(
+                        id: "mlx-community/DeepSeek-R1-Distill-Llama-8B-4bit",
+                        name: "DeepSeek R1 Distill Llama 8B",
+                        description: "Meta Llama backbone augmented with DeepSeek reasoning traces.",
+                        sizeFormatted: "4.9 GB",
+                        ramFormatted: "6.8 GB RAM",
+                        badges: [.thinking, .code],
+                        rawModel: HFModel(id: "mlx-community/DeepSeek-R1-Distill-Llama-8B-4bit", name: "DeepSeek-R1-Distill-Llama-8B-4bit", downloads: 64000, likes: 2100, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                    )
+                ]
+            )
+        ]
+    }
+}
+
+// Backwards-compatible struct so existing view references compile seamlessly
 struct ModelCatalogData {
-    static let featuredFamilies: [ModelFamily] = [
-        ModelFamily(
-            id: "bonsai",
-            name: "Bonsai",
-            icon: "leaf.fill",
-            provider: .other,
-            description: "A new class of ultra-efficient models from PrismML. Built for performance where it matters most: on-device and in real time.",
-            badges: [.new, .thinking, .vision],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/Bonsai-3B-Instruct-4bit",
-                    name: "Bonsai 3B Instruct",
-                    description: "Ultra-compact reasoning and multi-turn instruction model. Optimized for Apple Silicon real-time response.",
-                    sizeFormatted: "1.92 GB",
-                    ramFormatted: "2.4 GB RAM",
-                    badges: [.new, .thinking, .recommended],
-                    rawModel: HFModel(id: "mlx-community/Bonsai-3B-Instruct-4bit", name: "Bonsai-3B-Instruct-4bit", downloads: 12000, likes: 450, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/Bonsai-1.5B-VL-4bit",
-                    name: "Bonsai 1.5B VL",
-                    description: "High-speed multimodal vision model capable of image question answering with minimal memory overhead.",
-                    sizeFormatted: "1.10 GB",
-                    ramFormatted: "1.6 GB RAM",
-                    badges: [.new, .vision],
-                    rawModel: HFModel(id: "mlx-community/Bonsai-1.5B-VL-4bit", name: "Bonsai-1.5B-VL-4bit", downloads: 8500, likes: 310, tags: ["image-text-to-text"], pipelineTag: "image-text-to-text", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/Bonsai-7B-Reasoning-4bit",
-                    name: "Bonsai 7B Reasoning",
-                    description: "Expanded parameter flagship for in-depth chain-of-thought analysis, math, and code synthesis.",
-                    sizeFormatted: "4.45 GB",
-                    ramFormatted: "5.8 GB RAM",
-                    badges: [.new, .thinking],
-                    rawModel: HFModel(id: "mlx-community/Bonsai-7B-Reasoning-4bit", name: "Bonsai-7B-Reasoning-4bit", downloads: 15400, likes: 620, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                )
-            ]
-        ),
-        ModelFamily(
-            id: "gemma-4",
-            name: "Gemma 4",
-            icon: "sparkle",
-            provider: .gemma,
-            description: "The latest generation of open models from Google. Optimized for multi-turn chat, image understanding, and advanced reasoning.",
-            badges: [.new, .thinking, .vision],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/gemma-2-2b-it-4bit",
-                    name: "Gemma 2 2B Instruct",
-                    description: "Google's lightweight model designed for exceptional general knowledge, conversational flow, and low-latency interaction.",
-                    sizeFormatted: "1.60 GB",
-                    ramFormatted: "2.1 GB RAM",
-                    badges: [.new, .recommended],
-                    rawModel: HFModel(id: "mlx-community/gemma-2-2b-it-4bit", name: "gemma-2-2b-it-4bit", downloads: 48000, likes: 920, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/gemma-2-9b-it-4bit",
-                    name: "Gemma 2 9B Instruct",
-                    description: "Google's balanced powerhouse, matching previous generation flagship models in reasoning and coding benchmarks.",
-                    sizeFormatted: "5.40 GB",
-                    ramFormatted: "6.8 GB RAM",
-                    badges: [.thinking],
-                    rawModel: HFModel(id: "mlx-community/gemma-2-9b-it-4bit", name: "gemma-2-9b-it-4bit", downloads: 82000, likes: 1400, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/paligemma-3b-pt-448-4bit",
-                    name: "PaliGemma 3B Vision",
-                    description: "Versatile vision-language model for image captioning, object detection, and visual question answering.",
-                    sizeFormatted: "2.10 GB",
-                    ramFormatted: "3.2 GB RAM",
-                    badges: [.vision],
-                    rawModel: HFModel(id: "mlx-community/paligemma-3b-pt-448-4bit", name: "paligemma-3b-pt-448-4bit", downloads: 29000, likes: 670, tags: ["image-text-to-text"], pipelineTag: "image-text-to-text", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/codegemma-7b-it-4bit",
-                    name: "CodeGemma 7B Instruct",
-                    description: "Specialized model trained on extensive code repositories for synthesis, bug-fixing, and technical documentation.",
-                    sizeFormatted: "4.30 GB",
-                    ramFormatted: "5.6 GB RAM",
-                    badges: [.code],
-                    rawModel: HFModel(id: "mlx-community/codegemma-7b-it-4bit", name: "codegemma-7b-it-4bit", downloads: 35000, likes: 810, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                )
-            ]
-        ),
-        ModelFamily(
-            id: "lfm-2.5",
-            name: "LFM 2.5",
-            icon: "drop.fill",
-            provider: .other,
-            description: "A new generation of hybrid models developed by Liquid AI. Improved performance compared to LFM 2 and designed for on-device deployment.",
-            badges: [.new, .vision, .recommended, .thinking],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/LFM-2.5-3B-VL-4bit",
-                    name: "LFM 2.5 VL (3B)",
-                    description: "A model from Liquid AI. Good for answering questions about images, reading text in photos, and understanding documents in multiple languages. Recommended for Mac with M1 or newer.",
-                    sizeFormatted: "2.39 GB",
-                    ramFormatted: "3.1 GB RAM",
-                    badges: [.new, .vision, .recommended],
-                    rawModel: HFModel(id: "mlx-community/LFM-2.5-3B-VL-4bit", name: "LFM-2.5-3B-VL-4bit", downloads: 31000, likes: 890, tags: ["image-text-to-text"], pipelineTag: "image-text-to-text", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/LFM-2.5-1.6B-VL-4bit",
-                    name: "LFM 2.5 VL (1.6B)",
-                    description: "An updated vision-language model from Liquid AI. Enhanced performance over LFM 2 VL with improved multilingual vision understanding. Recommended for Mac with M1 or newer.",
-                    sizeFormatted: "1.50 GB",
-                    ramFormatted: "2.0 GB RAM",
-                    badges: [.vision],
-                    rawModel: HFModel(id: "mlx-community/LFM-2.5-1.6B-VL-4bit", name: "LFM-2.5-1.6B-VL-4bit", downloads: 19000, likes: 420, tags: ["image-text-to-text"], pipelineTag: "image-text-to-text", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/LFM-2.5-450M-VL-4bit",
-                    name: "LFM 2.5 VL (450M)",
-                    description: "A compact vision-language model from Liquid AI. Built on the LFM 2.5 backbone with stronger multilingual image understanding. Great for Shortcut use. Recommended for Mac with M1 or newer.",
-                    sizeFormatted: "471 MB",
-                    ramFormatted: "0.8 GB RAM",
-                    badges: [.vision],
-                    rawModel: HFModel(id: "mlx-community/LFM-2.5-450M-VL-4bit", name: "LFM-2.5-450M-VL-4bit", downloads: 14000, likes: 310, tags: ["image-text-to-text"], pipelineTag: "image-text-to-text", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/LFM-2.5-8B-A1B-4bit",
-                    name: "LFM 2.5 (8B A1B)",
-                    description: "A reasoning-tuned hybrid model from Liquid AI with 8.3B total parameters and 1.5B active. Designed for on-device assistants, instruction following, math, and multilingual chat. Recommended for Mac with M2 or newer.",
-                    sizeFormatted: "4.79 GB",
-                    ramFormatted: "6.0 GB RAM",
-                    badges: [.new, .thinking],
-                    rawModel: HFModel(id: "mlx-community/LFM-2.5-8B-A1B-4bit", name: "LFM-2.5-8B-A1B-4bit", downloads: 27000, likes: 780, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/LFM-2.5-2.6B-4bit",
-                    name: "LFM 2.5 (2.6B)",
-                    description: "Latest 2.6B parameter model from Liquid AI. Designed for general-purpose chat, data extraction, RAG, creative writing, and summarization.",
-                    sizeFormatted: "1.74 GB",
-                    ramFormatted: "2.3 GB RAM",
-                    badges: [.recommended],
-                    rawModel: HFModel(id: "mlx-community/LFM-2.5-2.6B-4bit", name: "LFM-2.5-2.6B-4bit", downloads: 22000, likes: 510, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                )
-            ]
-        ),
-        ModelFamily(
-            id: "minicpm-5",
-            name: "MiniCPM 5",
-            icon: "cpu.fill",
-            provider: .other,
-            description: "Lightweight models from OpenBMB. Good for everyday conversations in English and Chinese, coding, and problem-solving.",
-            badges: [.new, .thinking],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/MiniCPM-3-4B-4bit",
-                    name: "MiniCPM 3 (4B)",
-                    description: "Strong English and bilingual reasoning engine outperforming many 7B and 13B models in common benchmarks.",
-                    sizeFormatted: "2.40 GB",
-                    ramFormatted: "3.2 GB RAM",
-                    badges: [.new, .thinking],
-                    rawModel: HFModel(id: "mlx-community/MiniCPM-3-4B-4bit", name: "MiniCPM-3-4B-4bit", downloads: 18000, likes: 490, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/MiniCPM-V-2_6-4bit",
-                    name: "MiniCPM-V 2.6",
-                    description: "SOTA edge multimodal model handling images and video streams with OCR and spatial reasoning.",
-                    sizeFormatted: "4.80 GB",
-                    ramFormatted: "6.2 GB RAM",
-                    badges: [.vision],
-                    rawModel: HFModel(id: "mlx-community/MiniCPM-V-2_6-4bit", name: "MiniCPM-V-2_6-4bit", downloads: 41000, likes: 1120, tags: ["image-text-to-text"], pipelineTag: "image-text-to-text", createdAt: nil)
-                )
-            ]
-        ),
-        ModelFamily(
-            id: "qwen-3",
-            name: "Qwen 2.5 & 3",
-            icon: "sparkles",
-            provider: .qwen,
-            description: "High-capability foundation and coding models from Alibaba Cloud, supporting extensive languages, tool-use, and math.",
-            badges: [.new, .code, .thinking, .vision, .tools],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/Qwen2.5-7B-Instruct-4bit",
-                    name: "Qwen 2.5 7B Instruct",
-                    description: "Versatile, highly capable instruction-following foundation model with 128k context support and strong multilingual competence.",
-                    sizeFormatted: "4.68 GB",
-                    ramFormatted: "5.8 GB RAM",
-                    badges: [.new, .recommended, .tools],
-                    rawModel: HFModel(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", name: "Qwen2.5-7B-Instruct-4bit", downloads: 95000, likes: 2100, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
-                    name: "Qwen 2.5 Coder 7B",
-                    description: "Dedicated coding specialist matching GPT-4o in Python, Swift, TypeScript, and full-stack software development.",
-                    sizeFormatted: "4.70 GB",
-                    ramFormatted: "5.8 GB RAM",
-                    badges: [.new, .code, .tools],
-                    rawModel: HFModel(id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit", name: "Qwen2.5-Coder-7B-Instruct-4bit", downloads: 110000, likes: 3400, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/QwQ-32B-Preview-4bit",
-                    name: "QwQ 32B Preview",
-                    description: "Reasoning model designed to compete with OpenAI o1, generating explicit chains of thought for difficult math and logic.",
-                    sizeFormatted: "19.5 GB",
-                    ramFormatted: "24.0 GB RAM",
-                    badges: [.thinking],
-                    rawModel: HFModel(id: "mlx-community/QwQ-32B-Preview-4bit", name: "QwQ-32B-Preview-4bit", downloads: 68000, likes: 1900, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/Qwen2.5-3B-Instruct-4bit",
-                    name: "Qwen 2.5 3B Instruct",
-                    description: "Fast on-device model for quick tasks, chat assistance, and responsive interactions on any M-series Mac.",
-                    sizeFormatted: "2.10 GB",
-                    ramFormatted: "2.8 GB RAM",
-                    badges: [.recommended],
-                    rawModel: HFModel(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", name: "Qwen2.5-3B-Instruct-4bit", downloads: 42000, likes: 890, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                )
-            ]
-        ),
-        ModelFamily(
-            id: "deepseek",
-            name: "DeepSeek R1 & V3",
-            icon: "brain.head.profile",
-            provider: .deepseek,
-            description: "Open reasoning and coding powerhouses from DeepSeek AI. Features pure chain-of-thought distillation and coding.",
-            badges: [.new, .thinking, .code],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit",
-                    name: "DeepSeek R1 Distill 7B",
-                    description: "Distilled reasoning model that thinks aloud inside <think> tokens, solving complex science, math, and code problems.",
-                    sizeFormatted: "4.68 GB",
-                    ramFormatted: "5.8 GB RAM",
-                    badges: [.new, .thinking, .recommended],
-                    rawModel: HFModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit", name: "DeepSeek-R1-Distill-Qwen-7B-4bit", downloads: 145000, likes: 4200, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/DeepSeek-R1-Distill-Llama-8B-4bit",
-                    name: "DeepSeek R1 Distill Llama 8B",
-                    description: "Meta Llama backbone distilled with DeepSeek R1 reasoning patterns for structured problem solving.",
-                    sizeFormatted: "5.20 GB",
-                    ramFormatted: "6.4 GB RAM",
-                    badges: [.thinking],
-                    rawModel: HFModel(id: "mlx-community/DeepSeek-R1-Distill-Llama-8B-4bit", name: "DeepSeek-R1-Distill-Llama-8B-4bit", downloads: 89000, likes: 2100, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                )
-            ]
-        ),
-        ModelFamily(
-            id: "mistral",
-            name: "Mistral & Codestral",
-            icon: "wind",
-            provider: .mistral,
-            description: "Fast, efficient European language models with unmatched instruction precision, multilingual support, and coding mastery.",
-            badges: [.new, .code, .tools],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/Mistral-7B-Instruct-v0.3-4bit",
-                    name: "Mistral 7B Instruct v0.3",
-                    description: "The classic benchmark-setting 7B model with native function calling and vocabulary expansion.",
-                    sizeFormatted: "4.30 GB",
-                    ramFormatted: "5.4 GB RAM",
-                    badges: [.recommended, .tools],
-                    rawModel: HFModel(id: "mlx-community/Mistral-7B-Instruct-v0.3-4bit", name: "Mistral-7B-Instruct-v0.3-4bit", downloads: 78000, likes: 1600, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/Codestral-22B-v0.1-4bit",
-                    name: "Codestral 22B",
-                    description: "Mistral AI's premier generative code model, supporting over 80 programming languages with fill-in-the-middle.",
-                    sizeFormatted: "12.8 GB",
-                    ramFormatted: "16.0 GB RAM",
-                    badges: [.code],
-                    rawModel: HFModel(id: "mlx-community/Codestral-22B-v0.1-4bit", name: "Codestral-22B-v0.1-4bit", downloads: 54000, likes: 1300, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                )
-            ]
-        ),
-        ModelFamily(
-            id: "llama",
-            name: "Llama 3.3 & 3.2",
-            icon: "flame.fill",
-            provider: .llama,
-            description: "Meta's industry standard open-weights foundation models, supporting high-throughput conversational AI and vision.",
-            badges: [.vision, .tools, .recommended],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/Llama-3.2-3B-Instruct-4bit",
-                    name: "Llama 3.2 3B Instruct",
-                    description: "Meta's highly optimized lightweight model for on-device summarization, rewriting, and instruction following.",
-                    sizeFormatted: "2.10 GB",
-                    ramFormatted: "2.8 GB RAM",
-                    badges: [.new, .recommended],
-                    rawModel: HFModel(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", name: "Llama-3.2-3B-Instruct-4bit", downloads: 125000, likes: 3100, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                ),
-                ModelCatalogVariant(
-                    id: "mlx-community/Llama-3.2-11B-Vision-Instruct-4bit",
-                    name: "Llama 3.2 11B Vision",
-                    description: "Meta's multimodal model integrating vision adapters to reason about charts, images, and text jointly.",
-                    sizeFormatted: "6.80 GB",
-                    ramFormatted: "8.5 GB RAM",
-                    badges: [.vision],
-                    rawModel: HFModel(id: "mlx-community/Llama-3.2-11B-Vision-Instruct-4bit", name: "Llama-3.2-11B-Vision-Instruct-4bit", downloads: 64000, likes: 1700, tags: ["image-text-to-text"], pipelineTag: "image-text-to-text", createdAt: nil)
-                )
-            ]
-        ),
-        ModelFamily(
-            id: "phi",
-            name: "Microsoft Phi-4",
-            icon: "apple.terminal",
-            provider: .phi,
-            description: "Small language models from Microsoft with state-of-the-art math, logic, and scientific problem-solving capabilities.",
-            badges: [.thinking, .code],
-            variants: [
-                ModelCatalogVariant(
-                    id: "mlx-community/phi-4-4bit",
-                    name: "Phi-4 (14B)",
-                    description: "Microsoft's 14B parameter model matching larger 70B models in mathematical reasoning, STEM tasks, and code.",
-                    sizeFormatted: "8.60 GB",
-                    ramFormatted: "10.8 GB RAM",
-                    badges: [.new, .thinking, .code],
-                    rawModel: HFModel(id: "mlx-community/phi-4-4bit", name: "phi-4-4bit", downloads: 58000, likes: 1450, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
-                )
-            ]
-        )
-    ]
+    static var featuredFamilies: [ModelFamily] {
+        ModelCatalog.shared.families
+    }
 }

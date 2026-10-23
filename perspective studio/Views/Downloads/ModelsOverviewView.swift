@@ -39,6 +39,9 @@ struct ModelsOverviewView: View {
                 )
             } else {
                 overviewContent
+                    .task {
+                        await ModelCatalog.shared.fetchCatalogFromAPI()
+                    }
             }
         }
     }

@@ -6,11 +6,25 @@ struct ConversationListView: View {
     @Binding var selectedConversation: Conversation?
     var onOpenSettings: (() -> Void)? = nil
     var onOpenDownloads: (() -> Void)? = nil
-    var onToggleSidebar: (() -> Void)? = nil
+    var onOpenCompare: (() -> Void)? = nil
+    var onOpenAPIServer: (() -> Void)? = nil
+    var onBackToChat: (() -> Void)? = nil
     let onNewChat: () -> Void
     let onDelete: (Conversation) -> Void
 
+    @AppStorage("chatGradientTheme") private var gradientPresetRaw: String = GradientPreset.aurora.rawValue
+    @AppStorage("chatGradientTopHex") private var customTopHex: String = GradientTheme.defaultTopHex
+    @AppStorage("chatGradientBottomHex") private var customBottomHex: String = GradientTheme.defaultBottomHex
+
     @State private var searchQuery: String = ""
+
+    private var activeGradientColors: [Color] {
+        GradientTheme.activeColors(
+            presetRaw: gradientPresetRaw,
+            customTopHex: customTopHex,
+            customBottomHex: customBottomHex
+        )
+    }
 
     private var filteredConversations: [Conversation] {
         if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -24,19 +38,47 @@ struct ConversationListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Top Bar: Traffic lights spacing on left, action icons on right
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 // Reserved space for macOS traffic lights (red, yellow, green)
                 Spacer()
-                    .frame(width: 72)
+                    .frame(width: 68)
 
                 Spacer()
+
+                if let onOpenCompare {
+                    Button {
+                        onOpenCompare()
+                    } label: {
+                        Image(systemName: "square.split.2x1")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(width: 28, height: 28)
+                            .liquidGlass(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Model Comparison")
+                }
+
+                if let onOpenAPIServer {
+                    Button {
+                        onOpenAPIServer()
+                    } label: {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(width: 28, height: 28)
+                            .liquidGlass(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Local API Server")
+                }
 
                 if let onOpenDownloads {
                     Button {
                         onOpenDownloads()
                     } label: {
                         Image(systemName: "arrow.down.circle")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.white.opacity(0.85))
                             .frame(width: 28, height: 28)
                             .liquidGlass(.circle)
@@ -50,7 +92,7 @@ struct ConversationListView: View {
                         onOpenSettings()
                     } label: {
                         Image(systemName: "gearshape")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.white.opacity(0.85))
                             .frame(width: 28, height: 28)
                             .liquidGlass(.circle)
@@ -59,21 +101,21 @@ struct ConversationListView: View {
                     .help("Settings")
                 }
 
-                if let onToggleSidebar {
+                if let onBackToChat {
                     Button {
-                        onToggleSidebar()
+                        onBackToChat()
                     } label: {
-                        Image(systemName: "sidebar.left")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.85))
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.9))
                             .frame(width: 28, height: 28)
                             .liquidGlass(.circle)
                     }
                     .buttonStyle(.plain)
-                    .help("Toggle Sidebar")
+                    .help("Back to Chat")
                 }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
             .padding(.top, 14)
             .padding(.bottom, 10)
 
@@ -118,6 +160,7 @@ struct ConversationListView: View {
                     ForEach(filteredConversations) { conversation in
                         Button {
                             selectedConversation = conversation
+                            onBackToChat?()
                         } label: {
                             ConversationRowView(conversation: conversation)
                                 .background(
@@ -156,14 +199,15 @@ struct ConversationListView: View {
         }
         .frame(maxHeight: .infinity)
         .background(
-            LinearGradient(
-                colors: [
-                    Color(hex: "0D251C") ?? .black,
-                    Color(hex: "0A1C16") ?? .black
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            ZStack {
+                LinearGradient(
+                    colors: activeGradientColors,
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                // Subtle darkening veil that blends seamlessly with the main chat view
+                Color.black.opacity(0.20)
+            }
             .ignoresSafeArea()
         )
     }
