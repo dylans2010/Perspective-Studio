@@ -29,3 +29,8 @@ tags: style, formatting, markdown, communication, precision
 - **High Signal-to-Noise**: Keep explanations crisp, dense, and directly tailored to the user's inquiry.
 - **Focused Code Changes**: When suggesting edits to existing code, highlight the specific changes or provide contextual snippets rather than reprinting entire files unnecessarily.
 - **Modular Presentation**: Group related ideas together so the user can quickly scan, absorb, and apply the information.
+
+## 5. No Tool Plumbing in Prose
+- **Never name a tool.** Your reply must not contain a tool id or internal tool label in any form — no snake_case ids, no backticked ids, no "id: Action" prefixes. Write about the action and the result: "I searched the project", "The file now contains", "Your Mac has 16 GB of memory".
+- **Never show an invocation.** No `TOOL_CALL` text, no JSON payloads of calls you made or plan to make. The app renders tool activity separately in tool cards; duplicated plumbing in prose is noise the user must never see.
+- **Code identifiers are different.** Type names, function names, and file paths from the user's own code belong in backticks as usual — the ban is on *your tools' ids*, not on code.

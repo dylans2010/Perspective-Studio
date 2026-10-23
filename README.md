@@ -16,6 +16,8 @@ Built with SwiftUI and [MLX Swift](https://github.com/ml-explore/mlx-swift-lm) b
 - **Apple Silicon Native**: Runs 100% on-device using MLX Swift.
 - **Full Privacy**: Your data, documents, and conversations never leave your device.
 - **VoiceOver & Accessibility**: Keyboard shortcuts and full VoiceOver accessibility.
+- **Agent Mode with Projects**: Point the agent at a folder (a codebase, say) from the project picker or Settings → Projects. The agent works inside that folder and builds a per-project memory — facts, decisions, and session notes — that it reads at the start of every run and adds to as it learns. Tool activity is shown only in tool cards; raw tool invocations and identifiers never appear in chat text.
+- **Bundled Antigravity SDK**: The Google Antigravity SDK (0.1.20, Apache-2.0) ships inside the app under `Locally/AntigravitySDK/` and provides Agent mode's loop layer only — no SDK models and no SDK tools are bundled or used. Models are your local models; tools are Locally's own.
 
 ## Requirements
 

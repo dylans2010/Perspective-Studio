@@ -18,9 +18,11 @@ public enum AgentHarnessStatus: Sendable, Equatable {
         case .thinking:
             return "Reasoning..."
         case .callingTool(let name):
-            return "Calling \(name)..."
+            // Human action names only — raw tool ids are private protocol
+            // tokens and never reach the screen.
+            return "\(ToolNameFormatter.format(name))..."
         case .toolCompleted(let name):
-            return "Completed \(name)"
+            return ToolNameFormatter.completedTitle(for: name)
         case .finished:
             return "Completed"
         case .failed(let error):
@@ -109,13 +111,18 @@ public struct AgentExecutionOutcome: Sendable {
 
 // MARK: - Antigravity Agent Harness
 
-/// Pure native implementation of the Antigravity Agent SDK harness.
+/// The Agent-mode harness, built on the bundled Antigravity SDK's loop
+/// layer (`AntigravityLoopEngine`; the upstream SDK ships inside the app —
+/// see `AntigravitySDKBundle`).
 ///
 /// Principles:
-/// - Zero bundled cloud models — runs strictly on the user's locally installed models.
-/// - Zero hardcoded external tools — uses dynamically registered tools from `ToolsRegistry`.
+/// - The SDK contributes the loop ONLY: no SDK models and no SDK tools are
+///   bundled or used. Models are the user's locally installed ones
+///   (`InferenceBackend`); tools are Locally's own (`ToolsRegistry`).
 /// - Indexes guidelines from `SystemAssetsManager.shared.generatePromptIndex()`.
 /// - Orchestrates the multi-turn agent loop: Thought -> Tool Call -> Observation -> Synthesis.
+/// - Tool invocations are private plumbing: they are consumed by the loop
+///   and shown to the user only as tool cards, never as message text.
 @Observable
 @MainActor
 public final class AntigravityAgentHarness {
@@ -143,10 +150,17 @@ public final class AntigravityAgentHarness {
     }
 
     /// Executes the Antigravity Agent Loop autonomously on the user's local model.
+    ///
+    /// The loop itself is `AntigravityLoopEngine` (the bundled Antigravity
+    /// SDK's loop layer): it classifies turns, builds observation prompts,
+    /// and cleans final answers. This harness supplies what the loop must
+    /// never own — the model (`InferenceBackend`) and the tools
+    /// (`ToolsRegistry`).
     func run(
         prompt: String,
         modelID: String? = nil,
         workspaceRoot: URL = URL.documentsDirectory,
+        projectID: UUID? = nil,
         maxTurns: Int = 10,
         backend: (any InferenceBackend)? = nil,
         additionalSystemPrompt: String? = nil,
@@ -184,6 +198,7 @@ public final class AntigravityAgentHarness {
             return await FoundationModelAgentRunner.run(
                 prompt: prompt,
                 workspaceRoot: workspaceRoot,
+                projectID: projectID,
                 maxTurns: maxTurns,
                 dispatchStatus: dispatchStatus,
                 addStep: addStep,
@@ -230,6 +245,7 @@ public final class AntigravityAgentHarness {
         let assistContext = AssistContext(
             sessionId: UUID(),
             workspaceRoot: workspaceRoot,
+            agentProjectID: projectID,
             safetyLevel: .balanced,
             isAutonomous: true,
             sessionExecutionMode: .autopilot
@@ -286,10 +302,12 @@ public final class AntigravityAgentHarness {
                 return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
             }
 
-            // 4. Parse response for tool calls
-            if let toolCall = Self.parseToolCall(in: turnResponse) {
-                let toolId = toolCall.toolId
-                let args = toolCall.arguments
+            // 4. Classify the turn with the loop engine. Tool turns are
+            // consumed entirely by the loop: their text (which contains the
+            // raw invocation) is never forwarded to the chat as a message.
+            switch AntigravityLoopEngine.decide(turnText: turnResponse, knownToolIDs: ToolsRegistry.shared.allToolIDs) {
+            case .callTool(let toolId, let codableArgs):
+                let args = codableArgs.mapValues { $0.anyValue }
 
                 self.activeToolName = toolId
                 dispatchStatus(.callingTool(name: toolId))
@@ -298,7 +316,7 @@ public final class AntigravityAgentHarness {
 
                 let callStep = AgentStep(
                     kind: .toolCall,
-                    title: "Tool Call: \(toolId)",
+                    title: ToolNameFormatter.format(toolId),
                     detail: formatArgumentsPreview(args),
                     rawPayload: turnResponse,
                     toolName: toolId,
@@ -323,24 +341,27 @@ public final class AntigravityAgentHarness {
 
                 let resultStep = AgentStep(
                     kind: .toolResult,
-                    title: result.success ? "Result: \(toolId)" : "Tool Failed: \(toolId)",
+                    title: result.success ? ToolNameFormatter.completedTitle(for: toolId) : "\(ToolNameFormatter.format(toolId)) Failed",
                     detail: result.output,
                     toolName: toolId,
                     toolResult: result
                 )
                 addStep(resultStep)
 
-                // Feed tool result back into conversation turns
-                conversationTurns.append(Turn(role: "assistant", content: turnResponse))
+                // Feed tool result back into conversation turns. The
+                // assistant turn is recorded as a neutral marker, not the
+                // raw invocation text, so the model's own history stops
+                // teaching it to paste invocations into prose.
+                conversationTurns.append(Turn(role: "assistant", content: "[Used a tool: \(ToolNameFormatter.format(toolId))]"))
                 conversationTurns.append(Turn(
                     role: "user",
-                    content: "TOOL_RESULT [\(toolId)]:\n\(result.output)\n\nAnalyze this tool output and proceed to the next step, or provide the final answer if complete."
+                    content: AntigravityLoopEngine.observationPrompt(toolID: toolId, output: result.output)
                 ))
 
                 self.activeToolName = nil
-            } else {
+            case .finalAnswer(let answer):
                 // Model provided final synthesized answer (or direct response)
-                finalAnswer = cleanFinalAnswer(turnResponse)
+                finalAnswer = answer
                 let finalStep = AgentStep(
                     kind: .finalAnswer,
                     title: "Final Answer",
@@ -355,7 +376,8 @@ public final class AntigravityAgentHarness {
 
         // Loop concluded without direct answer
         if finalAnswer.isEmpty {
-            finalAnswer = currentThought.isEmpty ? "Agent completed \(turnCount) turns." : currentThought
+            let lastThought = AntigravityLoopEngine.cleanFinalAnswer(currentThought, knownToolIDs: ToolsRegistry.shared.allToolIDs)
+            finalAnswer = lastThought.isEmpty ? "Agent completed \(turnCount) turns." : lastThought
             addStep(AgentStep(kind: .finalAnswer, title: "Synthesized Output", detail: finalAnswer))
         }
 
@@ -383,6 +405,12 @@ public final class AntigravityAgentHarness {
         3. Do not include extra conversational text on the line of a TOOL_CALL.
         4. When the tool returns its result, analyze the observations and either call the next tool or give the final answer.
         5. When you have gathered enough information or the task is finished, respond directly to the user with a comprehensive, well-structured Markdown response (no tool call syntax).
+
+        ## Tool Secrecy — Absolute Rules (never break these):
+        - Tool ids, the TOOL_CALL syntax, and JSON invocation payloads are a private protocol between you and the runtime. The user NEVER sees them: the app shows your tool activity separately in its own tool cards.
+        - NEVER write a tool id in your final answer or in any prose — not in backticks, not as a label, not ever. Patterns like "file_append: Append to File" or "I used `computer_screenshot`" are forbidden. Describe the action in plain language instead: "I appended the note to the file", "I took a screenshot".
+        - NEVER paste, quote, or summarize an invocation payload, and never preface a tool call with an announcement of its id.
+        - If a tool fails, describe what you were trying to do and what went wrong in plain language — never the tool's id or raw error payload.
 
         \(assetsIndex)
 
@@ -423,14 +451,6 @@ public final class AntigravityAgentHarness {
         }
         lines.append("Assistant:")
         return lines.joined(separator: "\n\n")
-    }
-
-    private func cleanFinalAnswer(_ text: String) -> String {
-        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.hasPrefix("Assistant:") {
-            cleaned = String(cleaned.dropFirst("Assistant:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return cleaned
     }
 
     private func formatArgumentsPreview(_ args: [String: Any]) -> String {

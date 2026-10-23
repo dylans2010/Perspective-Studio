@@ -19,6 +19,7 @@ struct AgentModeBannerView: View {
     @State private var harness = AntigravityAgentHarness.shared
     @State private var toolsRegistry = ToolsRegistry.shared
     @State private var systemAssets = SystemAssetsManager.shared
+    @State private var projectsStore = AgentProjectsStore.shared
 
     private var statusText: String {
         if chatViewModel.isGenerating {
@@ -40,7 +41,8 @@ struct AgentModeBannerView: View {
                         .tracking(0.6)
                         .foregroundStyle(.cyan)
                     if harness.isRunning, let activeTool = harness.activeToolName {
-                        Text("· \(activeTool)")
+                        // Human action name only — never the raw tool id.
+                        Text("· \(ToolNameFormatter.format(activeTool))")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -56,11 +58,14 @@ struct AgentModeBannerView: View {
 
             // Live capability chips: what this agent turn actually has.
             HStack(spacing: 6) {
+                if let project = projectsStore.selectedProject {
+                    capabilityChip(icon: "folder.fill", label: project.name)
+                }
                 capabilityChip(icon: "wrench.and.screwdriver.fill", label: "\(toolsRegistry.allTools.count) tools")
                 capabilityChip(icon: "doc.text.fill", label: "\(systemAssets.availableAssets().count) assets")
                 capabilityChip(icon: "sparkles", label: "\(chatViewModel.activeSkills.count) skills")
             }
-            .help("Tools, system assets, and active skills available to the agent in this mode")
+            .help("Project, tools, system assets, and active skills available to the agent in this mode")
 
             Button {
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {

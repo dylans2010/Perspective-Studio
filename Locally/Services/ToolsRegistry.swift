@@ -508,6 +508,10 @@ public final class ToolsRegistry {
         register(tool: PlanAskUserTool())
         register(tool: ReportToUserTool())
 
+        // Per-project memory (Agent Projects): the agent reads/writes the
+        // active project's persistent memory through this tool.
+        register(tool: ProjectMemoryTool())
+
         // Computer Use (macOS desktop automation, built from scratch
         // on ScreenCaptureKit / Accessibility / Vision / CGEvent /
         // NSWorkspace — see Tools/Computer Use/ and the computer_use
@@ -530,6 +534,14 @@ public final class ToolsRegistry {
     /// All registered AssistTool instances sorted by name.
     public var allTools: [any AssistTool] {
         registeredTools.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// The canonical ids of every registered tool. These ids are private
+    /// protocol tokens: they exist so models can *call* tools, and they must
+    /// never appear in user-visible text (`ToolInvocationSanitizer` uses
+    /// this set to strip and redact them from model output).
+    public var allToolIDs: Set<String> {
+        Set(registeredTools.keys)
     }
 
     /// Formats human and model-readable schema descriptions of all registered tools.

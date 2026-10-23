@@ -237,7 +237,9 @@ struct ToolsView: View {
             let outcome = await ToolCallingService.run(prompt: agentPrompt, model: model, confirmedToolIDs: confirmedToolIDs)
             switch outcome {
             case .finished(let answer, let steps):
-                agentAnswer = answer
+                // The model's answer gets the same display treatment as
+                // chat: no invocation syntax, no raw tool ids.
+                agentAnswer = ToolInvocationSanitizer.displayText(for: answer, knownToolIDs: registry.allToolIDs)
                 agentSteps = steps
             case .needsConfirmation(let toolID, let arguments, let steps):
                 agentSteps = steps

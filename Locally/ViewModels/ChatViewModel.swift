@@ -451,6 +451,15 @@ final class ChatViewModel {
                     flushPendingTokens(force: true)
                 }
 
+                // Even in Chat mode a model can echo tool-invocation syntax
+                // or raw tool ids it was told about; none of that may be
+                // persisted as the visible reply. (The render layer
+                // sanitizes again, so the live stream was already clean.)
+                assistantMessage.content = ToolInvocationSanitizer.displayText(
+                    for: assistantMessage.content,
+                    knownToolIDs: ToolsRegistry.shared.allToolIDs
+                )
+
                 // Auto-read only if the setting is enabled — and read the
                 // answer, not the model's <thinking> reasoning.
                 if UserDefaults.standard.bool(forKey: "autoReadAloud") {
@@ -474,6 +483,13 @@ final class ChatViewModel {
     private func generateAgentResponse(for conversation: Conversation, assistantMessage: Message, in context: ModelContext) async {
         liveToolCalls = []
         let userPrompt = conversation.sortedMessages.last(where: { $0.role == .user })?.content ?? ""
+        let knownToolIDs = ToolsRegistry.shared.allToolIDs
+
+        // The selected Agent Project scopes the whole run: its folder is
+        // the workspace root every tool resolves against, and its notes,
+        // instructions, and per-project memory go into the context.
+        let project = AgentProjectsStore.shared.activeProject
+        let projectContext = project.map { AgentProjectsStore.shared.contextBlock(for: $0) }
 
         // The harness adds the full tool schemas + system-asset index itself;
         // what it never received before — and why Agent mode also claimed to
@@ -491,13 +507,21 @@ final class ChatViewModel {
                 activeSkills: Array(activeSkills),
                 thinkingEnabled: UserDefaults.standard.bool(forKey: "enableThinkingMode"),
                 thinkingBudget: UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium",
-                modelDisplayName: displayName(for: selectedModelID)
+                modelDisplayName: displayName(for: selectedModelID),
+                projectContext: projectContext
             )
         )
 
+        // Raw streamed tokens are accumulated privately and only the
+        // sanitized display text is ever written into the message: a tool
+        // turn's tokens contain the raw invocation JSON, which belongs to
+        // the tool cards, never to the message bubble.
+        var rawStreamed = ""
         let outcome = await AntigravityAgentHarness.shared.run(
             prompt: userPrompt,
             modelID: selectedModelID,
+            workspaceRoot: project?.rootURL ?? URL.documentsDirectory,
+            projectID: project?.id,
             maxTurns: 10,
             backend: selectedBackend,
             additionalSystemPrompt: agentContextPrompt
@@ -520,7 +544,8 @@ final class ChatViewModel {
                     self.liveToolCalls[index] = updated
                 }
             case .tokenStreamed(let token):
-                assistantMessage.content += token
+                rawStreamed += token
+                assistantMessage.content = ToolInvocationSanitizer.displayText(for: rawStreamed, knownToolIDs: knownToolIDs)
             case .failed(let err):
                 assistantMessage.content += "\n\n[Agent Error: \(err)]"
             default:
@@ -528,8 +553,30 @@ final class ChatViewModel {
             }
         }
 
-        if assistantMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            assistantMessage.content = outcome.answer
+        // The outcome's answer is authoritative (and already cleaned by the
+        // loop engine); sanitize once more here so no path can persist a
+        // raw invocation or tool id into the saved conversation.
+        let sanitizedAnswer = ToolInvocationSanitizer.displayText(for: outcome.answer, knownToolIDs: knownToolIDs)
+        if !sanitizedAnswer.isEmpty {
+            assistantMessage.content = sanitizedAnswer
+        } else if assistantMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            assistantMessage.content = sanitizedAnswer
+        }
+
+        // Per-project memory: every run in a project leaves a session note
+        // (task + outcome), so the next session in this project starts from
+        // what happened here — in addition to any facts the agent itself
+        // recorded with the project memory tool during the run.
+        if let project {
+            let taskSummary = String(userPrompt.prefix(160))
+            let outcomeSummary = sanitizedAnswer.isEmpty
+                ? (outcome.success ? "Completed without a written answer." : "Did not complete.")
+                : String(sanitizedAnswer.prefix(200))
+            AgentProjectsStore.shared.addMemoryEntry(
+                projectID: project.id,
+                text: "Task: \(taskSummary) — \(outcome.success ? "Outcome" : "Result (incomplete)"): \(outcomeSummary)",
+                kind: .session
+            )
         }
 
         let stepRecords: [ToolCallRecord] = outcome.steps

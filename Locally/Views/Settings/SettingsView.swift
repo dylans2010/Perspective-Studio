@@ -6,6 +6,7 @@ enum SettingsSidebarTab: String, CaseIterable, Identifiable {
     case general = "General"
     case models = "Models"
     case personalization = "Personalization"
+    case projects = "Projects"
     case computerUse = "Computer Use"
     case skills = "Manage Skills"
 
@@ -16,6 +17,7 @@ enum SettingsSidebarTab: String, CaseIterable, Identifiable {
         case .general: "gearshape"
         case .models: "cube"
         case .personalization: "person"
+        case .projects: "folder"
         case .computerUse: "desktopcomputer"
         case .skills: "sparkles"
         }
@@ -169,6 +171,8 @@ struct SettingsView: View {
                         modelsDetailView
                     case .personalization:
                         personalizationDetailView
+                    case .projects:
+                        AgentProjectsSettingsView()
                     case .computerUse:
                         ComputerUseSettingsView()
                     case .skills:

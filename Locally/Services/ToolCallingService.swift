@@ -48,10 +48,10 @@ enum ToolCallingService {
                 steps.append(ToolRunStep(title: "Model answered directly", detail: "No tool was requested."))
                 return .finished(answer: first.text, steps: steps)
             }
-            steps.append(ToolRunStep(title: "Model requested \(call.toolID)", detail: "\(call.arguments)"))
+            steps.append(ToolRunStep(title: "Model requested \(ToolNameFormatter.format(call.toolID))", detail: "\(call.arguments)"))
 
             guard let definition = ToolRegistry.shared.definition(for: call.toolID) else {
-                return .failed("The model requested an unknown tool ('\(call.toolID)'), so nothing was executed.", steps: steps)
+                return .failed("The model requested an action the agent does not have, so nothing was executed.", steps: steps)
             }
             if definition.requiresConfirmation && !confirmedToolIDs.contains(call.toolID) {
                 return .needsConfirmation(toolID: call.toolID, arguments: call.arguments, steps: steps)

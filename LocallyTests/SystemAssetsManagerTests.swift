@@ -13,6 +13,7 @@ final class SystemAssetsManagerTests: XCTestCase {
         XCTAssertTrue(assets.contains(where: { $0.id == "tool_usage_guidelines" }))
         XCTAssertTrue(assets.contains(where: { $0.id == "coding_standards" }))
         XCTAssertTrue(assets.contains(where: { $0.id == "response_style" }))
+        XCTAssertTrue(assets.contains(where: { $0.id == "agent_projects" }))
 
         let index = manager.generatePromptIndex()
         XCTAssertTrue(index.contains("[System Assets Index]"))
@@ -42,5 +43,23 @@ final class SystemAssetsManagerTests: XCTestCase {
         let style = manager.fetchAssetContent(named: "Response Style & Formatting")
         XCTAssertNotNil(style)
         XCTAssertTrue(style?.contains("Response Style") == true)
+
+        let projects = manager.fetchAssetContent(named: "agent_projects")
+        XCTAssertNotNil(projects)
+        XCTAssertTrue(projects?.contains("Agent Projects") == true)
+        XCTAssertTrue(projects?.contains("Project Memory") == true)
+    }
+
+    @MainActor
+    func testToolAssetsCarryTheSecrecyRule() async {
+        let manager = SystemAssetsManager.shared
+        await manager.scanAssets()
+
+        // The model must be trained, in every asset that covers tools or
+        // style, to never surface raw tool ids or invocation syntax.
+        let tools = manager.fetchAssetContent(named: "tool_usage_guidelines")
+        XCTAssertTrue(tools?.contains("Tool Secrecy") == true)
+        let style = manager.fetchAssetContent(named: "response_style")
+        XCTAssertTrue(style?.contains("No Tool Plumbing") == true)
     }
 }

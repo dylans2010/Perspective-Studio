@@ -57,7 +57,11 @@ struct QuickChatView: View {
             }
 
             if !response.isEmpty {
-                let parsed = ThinkingContentParser.parse(response)
+                // Same display rule as the main chat: no raw tool
+                // invocations or tool ids in visible text.
+                let parsed = ThinkingContentParser.parse(
+                    ToolInvocationSanitizer.displayText(for: response, knownToolIDs: ToolsRegistry.shared.allToolIDs)
+                )
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         if parsed.hasThinking {

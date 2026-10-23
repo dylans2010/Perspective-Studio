@@ -174,6 +174,12 @@ struct ChatDetailView: View {
             HStack(spacing: 8) {
                 modeSelectorPill
                 modelSelectorPill
+                // Agent mode: the project picker — which folder (codebase)
+                // the agent works in, with that project's own memory.
+                if chatViewModel.isAgentMode {
+                    AgentProjectPickerView(isEmptyConversation: isEmptyConversation)
+                        .transition(.opacity)
+                }
             }
 
             // Leading and Trailing items leveled horizontally in the same 32pt row
@@ -912,11 +918,33 @@ private struct MessageRowView: View {
         message.role == .assistant
     }
 
+    /// The message text as it may be shown. Assistant text passes the
+    /// tool-invocation sanitizer first: raw invocation JSON and tool ids
+    /// the model echoed into its reply are removed here even for messages
+    /// saved before the sanitizer existed — tool activity belongs to the
+    /// tool cards, never to the bubble.
+    private var sanitizedContent: String {
+        isAssistant
+            ? ToolInvocationSanitizer.displayText(for: message.content, knownToolIDs: ToolsRegistry.shared.allToolIDs)
+            : message.content
+    }
+
     /// Assistant content split into reasoning vs. answer. The model's
     /// <thinking> blocks render in `ThinkingModelUI`, never inside the
     /// answer bubble; user and system messages parse to themselves.
     private var parsed: ThinkingContentParser.ParsedContent {
-        isAssistant ? ThinkingContentParser.parse(message.content) : .init(answer: message.content)
+        isAssistant ? ThinkingContentParser.parse(sanitizedContent) : .init(answer: message.content)
+    }
+
+    /// The text the bubble renders — empty for an assistant turn that has
+    /// produced nothing visible yet (still reasoning, or a tool turn whose
+    /// prose was all invocation plumbing).
+    private var bubbleText: String {
+        isAssistant ? parsed.answer : message.content
+    }
+
+    private var hasBubble: Bool {
+        !bubbleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -966,10 +994,13 @@ private struct MessageRowView: View {
 
                 // Bubble — Markdown with full typography & code panels.
                 // Assistant bubbles show the parsed answer only (thinking
-                // blocks stripped); while the model is still inside an
-                // unclosed thinking tag there is no answer to show yet.
-                if !isAssistant || !parsed.answer.isEmpty || !parsed.hasThinking {
-                MarkdownContentView(content: isAssistant ? parsed.answer : message.content)
+                // blocks stripped). The bubble renders ONLY when there is
+                // visible text: while the model is still reasoning, or a
+                // tool turn is running, there is no answer yet — and an
+                // empty bubble is just a black box on screen. The
+                // generating indicator below the stream covers that state.
+                if hasBubble {
+                MarkdownContentView(content: bubbleText)
                     .font(.system(size: 14))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 16)
@@ -997,7 +1028,7 @@ private struct MessageRowView: View {
                         y: 2
                     )
                     .contextMenu {
-                        Button("Copy Text", systemImage: "doc.on.doc") { copyText(isAssistant ? parsed.answer : message.content) }
+                        Button("Copy Text", systemImage: "doc.on.doc") { copyText(bubbleText) }
                         if let onBranch {
                             Button("Branch From Here", systemImage: "arrow.branch", action: onBranch)
                         }

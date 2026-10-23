@@ -688,6 +688,10 @@ public struct AssistContext: Sendable {
     public let sessionId: UUID
     public let project: Any?
     public let workspaceRoot: URL
+    /// The Agent Project selected for this run, if any. Tools that keep
+    /// per-project state (the project memory tool) key off this id; the
+    /// project's folder is already the `workspaceRoot` for the run.
+    public let agentProjectID: UUID?
     public let memory: any AssistMemoryGraphProtocol
     public let logger: any AssistLoggerProtocol
     public let fileSystem: any AssistFileSystemProtocol
@@ -701,6 +705,7 @@ public struct AssistContext: Sendable {
         sessionId: UUID = UUID(),
         project: Any? = nil,
         workspaceRoot: URL = URL.documentsDirectory,
+        agentProjectID: UUID? = nil,
         memory: (any AssistMemoryGraphProtocol)? = nil,
         logger: (any AssistLoggerProtocol)? = nil,
         fileSystem: (any AssistFileSystemProtocol)? = nil,
@@ -713,6 +718,7 @@ public struct AssistContext: Sendable {
         self.sessionId = sessionId
         self.project = project
         self.workspaceRoot = workspaceRoot
+        self.agentProjectID = agentProjectID
         self.memory = memory ?? DefaultAssistMemoryGraph()
         self.logger = logger ?? DefaultAssistLogger()
         self.fileSystem = fileSystem ?? AssistFileSystem(workspaceRoot: workspaceRoot)

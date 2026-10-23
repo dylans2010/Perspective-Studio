@@ -79,8 +79,31 @@ final class ModelContextBuilderTests: XCTestCase {
     }
 
     func testCompactToolsListFormat() {
+        // Chat mode gets human capability names and descriptions — and NO
+        // raw tool ids, which are private protocol tokens the model must
+        // never learn to say (see ToolInvocationSanitizer).
         let list = ModelContextBuilder.compactToolsList(from: [CalculatorAssistTool(), DateTimeAssistTool()])
-        XCTAssertTrue(list.contains("`calculator`"))
-        XCTAssertTrue(list.contains("`date_time`"))
+        XCTAssertTrue(list.contains("Calculator"))
+        XCTAssertTrue(list.contains("Date & Time"))
+        XCTAssertFalse(list.contains("calculator`"))
+        XCTAssertFalse(list.contains("`date_time`"))
+    }
+
+    func testEveryPromptCarriesTheToolSecrecyRule() {
+        let chat = ModelContextBuilder.build(ModelContextBuilder.Input(isAgentMode: false))
+        let agent = ModelContextBuilder.build(ModelContextBuilder.Input(isAgentMode: true))
+        XCTAssertTrue(chat.contains("Never Reveal Tool Plumbing"))
+        XCTAssertTrue(agent.contains("Never Reveal Tool Plumbing"))
+    }
+
+    func testProjectContextIsIncludedWhenProvided() {
+        let prompt = ModelContextBuilder.build(
+            ModelContextBuilder.Input(
+                isAgentMode: true,
+                projectContext: "[Active Project — Demo]\nProject memory marker"
+            )
+        )
+        XCTAssertTrue(prompt.contains("[Active Project — Demo]"))
+        XCTAssertTrue(prompt.contains("Project memory marker"))
     }
 }

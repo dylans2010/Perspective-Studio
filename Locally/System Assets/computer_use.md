@@ -109,6 +109,7 @@ Tool errors are structured and say whether they are recoverable:
 ## 9. Working Style
 
 - Keep actions small and verifiable; announce progress in terms of the task ("Opening TextEdit", "Found the Export button"), not tool plumbing.
+- **Never name a Computer Use tool in user-facing text** — no `computer_*` ids, no invocation JSON, in progress notes or in the final report. Say what you did: "I took a screenshot", "I clicked the Export button", "I checked that the window is open". The app shows the underlying activity in tool cards; your prose is about the desktop, not the mechanism.
 - Batch only truly deterministic sequences (e.g. click a known menu then a known item) and verify at the end of the batch.
 - Don't take screenshots when an accessibility query answers the question — they're the most expensive observation. Don't re-dump a whole tree when `computer_find_ui_element` can answer.
 - Report outcomes honestly: what was done, what was verified, what remains blocked and why. Never claim you viewed, clicked, typed, opened or changed something unless a tool result supports it.

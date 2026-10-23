@@ -56,6 +56,9 @@ enum ModelContextBuilder {
         var knowledgeContext: String? = nil
         /// Display name of the selected model, for the identity line.
         var modelDisplayName: String? = nil
+        /// The active Agent Project's context block (AgentProjectsStore):
+        /// folder, notes, standing instructions, and per-project memory.
+        var projectContext: String? = nil
     }
 
     static func build(_ input: Input) -> String {
@@ -99,10 +102,10 @@ enum ModelContextBuilder {
                 }
             } else if !input.compactToolsList.isEmpty {
                 sections.append("""
-                [Your Tools — you DO have tools, provided by Locally]:
+                [Your Capabilities — provided by Locally's tools]:
                 \(input.compactToolsList)
 
-                You are in Chat mode, where tools are NOT executed. If a task genuinely needs one of these tools (reading files, searching the workspace, checking this Mac, …), say which tool you would use and ask the user to switch to Agent mode with the Chat/Agent toggle — do not claim you ran a tool, and do not invent a tool result. If the user asks what tools you have, answer from the list above.
+                You are in Chat mode, where tools are NOT executed. If a task genuinely needs one of these capabilities (reading files, searching the workspace, checking this Mac, …), describe in plain language what you would do and ask the user to switch to Agent mode with the Chat/Agent toggle — do not claim you ran anything, and do not invent a result. If the user asks what you can do, answer from the list above, in plain language.
                 """)
             }
         }
@@ -112,7 +115,7 @@ enum ModelContextBuilder {
             sections.append("""
             [Your System Assets — built-in guideline documents you can consult]:
             \(input.systemAssetsIndex)
-            These are real documents stored in the app. In Agent mode you can retrieve any of them in full with the `system_asset_lookup` tool; in Chat mode, refer to them by name when they are relevant rather than pretending they don't exist.
+            These are real documents stored in the app. In Agent mode you can retrieve any of them in full on demand; in Chat mode, refer to them by name when they are relevant rather than pretending they don't exist.
             """)
         }
 
@@ -158,15 +161,37 @@ enum ModelContextBuilder {
             sections.append("[Relevant passages from the user's local knowledge base — cite them like [Title · passage N] when you use them]:\n" + knowledge)
         }
 
+        // Active Agent Project: folder scope, notes, standing instructions,
+        // and the per-project memory the agent must work from.
+        if let project = input.projectContext, !project.isEmpty {
+            sections.append(project)
+        }
+
+        // Tool secrecy — in EVERY mode. Tool ids and invocation syntax are
+        // a private protocol between the model and the runtime; the app
+        // renders tool activity in its own cards. Models used to paste raw
+        // ids ("file_append: Append to File") and whole JSON invocations
+        // into their replies; this rule, the system assets, and
+        // ToolInvocationSanitizer exist so that never reaches the user.
+        sections.append("""
+        [Never Reveal Tool Plumbing — absolute rule]:
+        - Never write a tool's id or name in your reply, in any form: no snake_case ids, no backticked ids, no "id: Label" prefixes, no TOOL_CALL lines, no JSON invocation payloads.
+        - Refer to your capabilities and actions in plain language only: "I can read the files in your project", "I searched the codebase", "I checked your Mac's memory".
+        - If you used a capability, describe what you did and what you found — never which tool did it.
+        """)
+
         return sections.joined(separator: "\n\n")
     }
 
-    /// One line per registered tool (`- \`id\`: name — description`), for
-    /// Chat-mode awareness. Full argument schemas are Agent-mode only: they
-    /// cost hundreds of tokens a small local model can't spare in plain chat.
+    /// One line per registered tool (`- name — description`), for Chat-mode
+    /// awareness. Deliberately carries NO tool ids: Chat mode cannot call
+    /// tools, so the ids would only teach the model tokens it must never
+    /// say. Full argument schemas (with ids) are Agent-mode only — they
+    /// cost hundreds of tokens a small local model can't spare in plain
+    /// chat, and Agent mode's runtime consumes the ids privately.
     static func compactToolsList(from tools: [any AssistTool]) -> String {
         tools
-            .map { "- `\($0.id)`: \($0.name) — \($0.description)" }
+            .map { "- \($0.name) — \($0.description)" }
             .joined(separator: "\n")
     }
 }

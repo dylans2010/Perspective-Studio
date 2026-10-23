@@ -30,6 +30,7 @@ enum FoundationModelAgentRunner {
     static func run(
         prompt: String,
         workspaceRoot: URL,
+        projectID: UUID? = nil,
         maxTurns: Int,
         dispatchStatus: @escaping @MainActor (AgentHarnessStatus) -> Void,
         addStep: @escaping @MainActor (AgentStep) -> Void,
@@ -45,6 +46,7 @@ enum FoundationModelAgentRunner {
 
         let context = AssistContext(
             workspaceRoot: workspaceRoot,
+            agentProjectID: projectID,
             safetyLevel: .balanced,
             isAutonomous: true,
             sessionExecutionMode: .autopilot
@@ -84,7 +86,7 @@ enum FoundationModelAgentRunner {
                     onEvent?(.toolCallDetected(tool: toolID, arguments: arguments.mapValues { $0 as Any }))
                     record(AgentStep(
                         kind: .toolCall,
-                        title: "Tool Call: \(toolID)",
+                        title: ToolNameFormatter.format(toolID),
                         detail: arguments
                             .sorted { $0.key < $1.key }
                             .map { "\($0.key): \($0.value)" }
@@ -96,7 +98,7 @@ enum FoundationModelAgentRunner {
                     onEvent?(.toolExecutionFinished(tool: toolID, result: result))
                     record(AgentStep(
                         kind: .toolResult,
-                        title: result.success ? "Result: \(toolID)" : "Tool Failed: \(toolID)",
+                        title: result.success ? ToolNameFormatter.completedTitle(for: toolID) : "\(ToolNameFormatter.format(toolID)) Failed",
                         detail: result.output,
                         toolName: toolID,
                         toolResult: result
@@ -147,7 +149,11 @@ enum FoundationModelAgentRunner {
         toolEventsContinuation.finish()
         await eventPump.value
 
-        if answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // Native tool calling never puts invocation syntax in the text,
+        // but the answer still passes the same display sanitizer as every
+        // other path, so no raw tool identifier can reach the user.
+        answer = ToolInvocationSanitizer.displayText(for: answer, knownToolIDs: registry.allToolIDs)
+        if answer.isEmpty {
             answer = "The built-in model finished without producing an answer."
         }
 
@@ -168,7 +174,8 @@ enum FoundationModelAgentRunner {
         ## How to work
         1. Use a tool whenever the task needs real files, device facts, arithmetic, or guidelines. Do not guess file contents or system details.
         2. Read the tool result, then either call another tool or give the final answer.
-        3. When a system guideline would help, retrieve it with the system_asset_lookup tool instead of inventing rules.
+        3. When a system guideline would help, retrieve it with the system asset lookup instead of inventing rules.
+        4. Never mention a tool's name or id in your answer. The app shows your tool activity in its own cards; in your text, describe actions and findings in plain language ("I read the file", "I searched the project").
 
         \(assetsIndex)
 
