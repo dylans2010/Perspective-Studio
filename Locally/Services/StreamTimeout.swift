@@ -32,10 +32,10 @@ public struct GenerationTimeoutError: Error, LocalizedError, Sendable {
 ///
 /// Cancellation of the *consuming* task also tears the producer down via
 /// `onTermination`, so a user stop and a timeout take the same path.
-public enum StreamTimeout {
+enum StreamTimeout {
 
     /// Deadline-wraps a backend event stream (`InferenceBackend`).
-    public nonisolated static func events(
+    nonisolated static func events(
         _ base: AsyncThrowingStream<GenerationEvent, Error>,
         after timeout: Duration
     ) -> AsyncThrowingStream<GenerationEvent, Error> {
@@ -71,7 +71,7 @@ public enum StreamTimeout {
     /// `AsyncStream<String>`; the wrapped form throws so the timeout is
     /// visible to the caller's error handling instead of looking like a
     /// clean end-of-stream).
-    public nonisolated static func tokens(
+    nonisolated static func tokens(
         _ base: AsyncStream<String>,
         after timeout: Duration
     ) -> AsyncThrowingStream<String, Error> {

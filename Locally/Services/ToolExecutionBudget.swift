@@ -13,7 +13,7 @@ import Foundation
 /// the run terminates honestly instead of spinning.
 ///
 /// Thread-safe by lock: bridged tool calls arrive off the main actor.
-public final class ToolExecutionBudget: @unchecked Sendable {
+public nonisolated final class ToolExecutionBudget: @unchecked Sendable {
     /// Maximum executions this budget allows (at least 1).
     public let limit: Int
     private let lock = NSLock()

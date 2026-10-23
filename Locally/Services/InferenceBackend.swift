@@ -22,7 +22,7 @@ struct GenerationMetrics: Sendable, Codable {
     }
 }
 
-struct GenerationRun: Sendable {
+struct GenerationResult: Sendable {
     let text: String
     let metrics: GenerationMetrics
 }
@@ -61,11 +61,11 @@ protocol InferenceBackend: Sendable {
     func currentlyLoadedModelID() async -> String?
     /// Streams one self-contained prompt (fresh session, no chat history).
     func stream(prompt: String, systemPrompt: String?) throws -> AsyncThrowingStream<GenerationEvent, Error>
-    func generate(prompt: String, systemPrompt: String?) async throws -> GenerationRun
+    func generate(prompt: String, systemPrompt: String?) async throws -> GenerationResult
 }
 
 extension InferenceBackend {
-    func generate(prompt: String, systemPrompt: String?) async throws -> GenerationRun {
+    func generate(prompt: String, systemPrompt: String?) async throws -> GenerationResult {
         let stream = try stream(prompt: prompt, systemPrompt: systemPrompt)
         var text = ""
         var metrics = GenerationMetrics()
@@ -75,7 +75,7 @@ extension InferenceBackend {
             case .finished(let finalMetrics): metrics = finalMetrics
             }
         }
-        return GenerationRun(text: text, metrics: metrics)
+        return GenerationResult(text: text, metrics: metrics)
     }
 }
 

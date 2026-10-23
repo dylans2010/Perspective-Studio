@@ -776,9 +776,14 @@ final class ChatViewModel {
             .filter { $0.kind == .toolCall || $0.kind == .toolResult }
             .map { ToolCallRecord(agentStep: $0) }
 
-        let finalRecords = !structuredRecords.isEmpty
-            ? structuredRecords
-            : (!stepRecords.isEmpty ? stepRecords : self.liveToolCalls)
+        let finalRecords: [ToolCallRecord]
+        if !structuredRecords.isEmpty {
+            finalRecords = structuredRecords
+        } else if !stepRecords.isEmpty {
+            finalRecords = stepRecords
+        } else {
+            finalRecords = self.liveToolCalls
+        }
         self.messageToolCalls[assistantMessage.id] = finalRecords
         self.liveToolCalls = []
 

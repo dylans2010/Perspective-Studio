@@ -179,7 +179,7 @@ public enum ContextIndexManager {
     /// of these words about something else ("what is your name for
     /// this variable?") may still match "your name" — retrieving the
     /// identity summary there is harmless context, never an answer.
-    public static func isIdentityQuery(_ query: String) -> Bool {
+    public nonisolated static func isIdentityQuery(_ query: String) -> Bool {
         let text = " " + query.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
