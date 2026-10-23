@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A6D500022F60000100000002 /* AntigravitySDK in Resources */ = {isa = PBXBuildFile; fileRef = A6D500012F60000100000001 /* AntigravitySDK */; };
 		9DA0BA1C2F5B801300DA2772 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1A200012F5A000100000003 /* MLXLLM */; };
 		9DA0BA1D2F5B801300DA2772 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1A200012F5A000100000004 /* MLXVLM */; };
 		9DA0BA1E2F5B801300DA2772 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = D1A200012F5A000100000005 /* MLXLMCommon */; };
@@ -31,7 +30,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A6D500012F60000100000001 /* AntigravitySDK */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "Locally/AntigravitySDK"; sourceTree = "<group>"; };
 		9DE341F62F59134300242AA7 /* Locally.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Locally.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9DE342072F59134400242AA7 /* LocallyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "LocallyTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9DE342112F59134400242AA7 /* LocallyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "LocallyUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -169,7 +167,6 @@
 			isa = PBXGroup;
 			children = (
 				9DE341F82F59134300242AA7 /* Locally */,
-				A6D500012F60000100000001 /* AntigravitySDK */,
 				9DE3420A2F59134400242AA7 /* LocallyTests */,
 				9DE342142F59134400242AA7 /* LocallyUITests */,
 				9DE341F72F59134300242AA7 /* Products */,
@@ -196,6 +193,7 @@
 				9DE341F22F59134300242AA7 /* Sources */,
 				9DE341F32F59134300242AA7 /* Frameworks */,
 				9DE341F42F59134300242AA7 /* Resources */,
+				A6D500032F60000100000003 /* Bundle Antigravity SDK */,
 			);
 			buildRules = (
 			);
@@ -308,7 +306,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A6D500022F60000100000002 /* AntigravitySDK in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -327,6 +324,30 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+
+/* Begin PBXShellScriptBuildPhase section */
+		A6D500032F60000100000003 /* Bundle Antigravity SDK */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Locally/AntigravitySDK/sdk-manifest.json",
+			);
+			name = "Bundle Antigravity SDK";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Resources/AntigravitySDK",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nif [ \"${PLATFORM_NAME}\" != \"macosx\" ]; then exit 0; fi\nSRC=\"${SRCROOT}/Locally/AntigravitySDK\"\nDST=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/AntigravitySDK\"\nif [ ! -f \"${SRC}/sdk-manifest.json\" ]; then echo \"error: Antigravity SDK manifest missing at ${SRC}\" >&2; exit 1; fi\nif [ -e \"${SRC}/google/antigravity/bin\" ]; then echo \"error: the SDK compiled runtime (bin/) must not ship - the SDK is loop-only\" >&2; exit 1; fi\nrm -rf \"${DST}\"\nmkdir -p \"${DST}\"\nditto --noextattr --norsrc \"${SRC}\" \"${DST}\"\nCOUNT=$(find \"${DST}\" -type f | wc -l | tr -d \" \")\necho \"Bundled Antigravity SDK into app Resources: ${COUNT} files\"\nif [ \"${COUNT}\" -lt 50 ]; then echo \"error: Antigravity SDK copy is incomplete (${COUNT} files)\" >&2; exit 1; fi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		9DE341F22F59134300242AA7 /* Sources */ = {

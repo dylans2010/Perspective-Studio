@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Verify the Antigravity SDK is actually bundled into the Locally app.
 
-The SDK must reach the built app as ONE folder reference copied into
-Contents/Resources/AntigravitySDK/ with its directory structure intact.
-The project uses a file-system synchronized group for Locally/, which
-flattens loose resources into the bundle root (and collides on the SDK's
-many __init__.py files), so the vendored files are membership-excepted
-from the synchronized group and shipped via the explicit folder
-reference instead. This script fails if either half of that wiring is
+The SDK must reach the built app as a complete directory tree at
+Contents/Resources/AntigravitySDK/. The project uses a file-system
+synchronized group for Locally/, which flattens loose resources into
+the bundle root (and collides on the SDK's many __init__.py files), so
+the vendored files are membership-excepted from the synchronized group
+and copied instead by a dedicated "Bundle Antigravity SDK" Run Script
+build phase (ditto, manifest-gated, fails the build if the copy is
+incomplete). This script fails if either half of that wiring is
 missing, if the vendored tree drifts from sdk-manifest.json, or if the
 SDK's compiled localharness runtime sneaks back in (loop-only policy).
 
@@ -39,29 +40,24 @@ def main():
     pbx = open(PBXPROJ, encoding="utf-8").read()
 
     print("== Xcode project wiring ==")
-    fileref = re.search(
-        r"(\w{24}) /\* AntigravitySDK \*/ = \{isa = PBXFileReference;[^}]*"
-        r"lastKnownFileType = folder;[^}]*path = \"Locally/AntigravitySDK\"",
+    phase = re.search(
+        r"(\w{24}) /\* Bundle Antigravity SDK \*/ = \{\s*isa = PBXShellScriptBuildPhase;",
         pbx,
     )
-    check(fileref is not None,
-          "PBXFileReference folder entry for Locally/AntigravitySDK exists")
-    buildfile = re.search(
-        r"(\w{24}) /\* AntigravitySDK in Resources \*/ = \{isa = PBXBuildFile; "
-        r"fileRef = (\w{24}) /\* AntigravitySDK \*/; \}",
-        pbx,
-    )
-    check(buildfile is not None, "PBXBuildFile 'AntigravitySDK in Resources' exists")
-    if fileref and buildfile:
-        check(buildfile.group(2) == fileref.group(1),
-              "BuildFile points at the folder FileReference")
-    # The Resources phase of the Locally target must reference the build file.
-    resources = re.search(
-        r"9DE341F42F59134300242AA7 /\* Resources \*/ = \{[^}]*?files = \(([^)]*)\)",
-        pbx, re.S)
-    check(resources is not None and buildfile is not None
-          and buildfile.group(1) in resources.group(1),
-          "Locally target Resources phase contains the SDK build file")
+    check(phase is not None, "'Bundle Antigravity SDK' shell-script phase exists")
+    if phase:
+        pid = phase.group(1)
+        target = re.search(
+            r"9DE341F52F59134300242AA7 /\* Locally \*/ = \{.*?buildPhases = \(([^)]*)\)",
+            pbx, re.S)
+        check(target is not None and pid in target.group(1),
+              "script phase is in the Locally target's build phases")
+        check("Locally/AntigravitySDK" in pbx and "ditto" in pbx,
+              "script copies Locally/AntigravitySDK with ditto")
+        check("sdk-manifest.json" in pbx,
+              "script is gated on the SDK manifest")
+        check("Contents/Resources/AntigravitySDK" in pbx.replace("$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Resources/AntigravitySDK", "Contents/Resources/AntigravitySDK"),
+              "script destination is the app bundle's Resources/AntigravitySDK")
 
     print("== Synchronized-group exceptions ==")
     exceptions = re.findall(r"AntigravitySDK/([^\s,;]+\.py|sdk-manifest\.json|LICENSE|BUNDLED\.md|google_antigravity-0\.1\.20\.dist-info/METADATA)", pbx)
@@ -93,7 +89,7 @@ def main():
     if failures:
         print(f"\n{len(failures)} problem(s): the Antigravity SDK is NOT correctly bundled.")
         return 1
-    print("\nAntigravity SDK bundling is correct: folder reference -> Resources, "
+    print("\nAntigravity SDK bundling is correct: script phase -> Resources, "
           "exceptions prevent flattening, manifest intact, loop-only.")
     return 0
 

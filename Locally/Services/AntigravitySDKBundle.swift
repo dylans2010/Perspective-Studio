@@ -69,15 +69,15 @@ public enum AntigravitySDKBundle {
     /// Finds the bundled SDK directory: the app bundle's resources first,
     /// then the source-tree locations a dev build runs from.
     ///
-    /// The SDK reaches the bundle through an explicit *folder reference*
-    /// in the Xcode project (`AntigravitySDK` in the Locally target's
-    /// Resources phase), so a built app contains a real
-    /// `Contents/Resources/AntigravitySDK/` directory with the vendored
-    /// tree intact — directory structure preserved, which the per-file
-    /// synchronized-group copy could never provide (it flattens resources
-    /// and collides on the SDK's many `__init__.py` files; those files are
-    /// membership-excepted from the synchronized group for exactly that
-    /// reason, and this folder reference is what actually ships them).
+    /// The SDK reaches the bundle through the Locally target's
+    /// "Bundle Antigravity SDK" Run Script build phase, which copies the
+    /// vendored tree with `ditto` into a real
+    /// `Contents/Resources/AntigravitySDK/` directory — structure intact,
+    /// verified complete at build time. (The per-file synchronized-group
+    /// copy could never provide this: it flattens resources and collides
+    /// on the SDK's many `__init__.py` files, so those files are
+    /// membership-excepted from the synchronized group, and the script
+    /// phase is what actually ships them.)
     public nonisolated static func bundledDirectory(bundle: Bundle = .main) -> URL? {
         let fm = FileManager.default
         var candidates: [URL] = []

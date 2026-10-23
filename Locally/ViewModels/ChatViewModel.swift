@@ -401,7 +401,15 @@ final class ChatViewModel {
                         thinkingEnabled: ThinkingSettings.isEnabled,
                         thinkingBudget: ThinkingSettings.budget,
                         knowledgeContext: knowledge,
-                        modelDisplayName: displayName(for: selectedModelID)
+                        modelDisplayName: displayName(for: selectedModelID),
+                        // A selected project informs Chat mode too (folder,
+                        // snapshot, memory, pinned files) — without the
+                        // tool mandate, since Chat cannot call tools; the
+                        // tools section above tells the model to point the
+                        // user at Agent mode when the task needs them.
+                        projectContext: AgentProjectsStore.shared.activeProject.map {
+                            AgentProjectsStore.shared.contextBlock(for: $0, includeToolMandate: false)
+                        }
                     )
                 )
 

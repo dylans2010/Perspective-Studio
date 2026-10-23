@@ -141,7 +141,7 @@ public final class AgentProjectsStore {
     /// the agent *remember this project in particular*: memory is injected
     /// on every run, and durable new facts are written back through the
     /// project memory tool and the post-run session note.
-    public func contextBlock(for project: AgentProject, memoryLimit: Int = 40) -> String {
+    public func contextBlock(for project: AgentProject, memoryLimit: Int = 40, includeToolMandate: Bool = true) -> String {
         var lines: [String] = [
             "[Active Project — \(project.name)]",
             "Project folder (your workspace root for this run — resolve every relative path against it, and stay inside it unless the user says otherwise): \(project.rootPath)"
@@ -193,8 +193,12 @@ public final class AgentProjectsStore {
 
         // The Project Tool Mandate, in the context block as well as the
         // harness prompt, so every Agent path (MLX loop, Apple-model
-        // runner) carries it.
-        if project.requireToolUse {
+        // runner) carries it. Chat mode passes `includeToolMandate:
+        // false` — it receives the project's context (folder, snapshot,
+        // memory, pinned files) but cannot call tools, so the mandate
+        // there would order the impossible; its tools section already
+        // tells the model to point the user at Agent mode for tool work.
+        if project.requireToolUse && includeToolMandate {
             lines.append("TOOL MANDATE for this project: you must ALWAYS use/call tools when working in this project — no exceptions. Your first action must be a tool call that explores the project, and every claim about the project must be grounded in a tool result from this run. The runtime rejects a final answer given before any tool has run.")
         }
 

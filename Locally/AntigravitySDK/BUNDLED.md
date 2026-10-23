@@ -41,22 +41,28 @@ The SDK is bundled **for its agent loop only**:
 
 ## How it is bundled (Xcode wiring)
 
-The SDK ships through an explicit **folder reference**: the Xcode
-project carries a `folder`-type reference for `Locally/AntigravitySDK`
-in the Locally target's **Resources** build phase, so the build copies
-the whole directory — structure intact — to
-`Contents/Resources/AntigravitySDK/` in the app bundle, where
-`AntigravitySDKBundle.bundledDirectory()` finds and verifies it.
+The SDK ships via a dedicated **"Bundle Antigravity SDK" Run Script
+build phase** on the Locally target. The script copies this directory
+with `ditto` — structure intact — to
+`Contents/Resources/AntigravitySDK/` in the built app, where
+`AntigravitySDKBundle.bundledDirectory()` finds and verifies it. The
+script is gated on `sdk-manifest.json`, refuses to ship the SDK's
+compiled `bin/` runtime (loop-only), and **fails the build** if the
+copied tree has fewer than 50 files, so a broken bundle can never
+silently reach a user again.
 
 The individual files are *also* listed as membership exceptions in the
 project's file-system synchronized group. That half matters just as
 much: without the exceptions, the synchronized group would try to copy
 each file as a loose resource — flattening the tree into the bundle
 root and colliding on the many `__init__.py` files (the duplicate-
-resource build failure this wiring replaced) — and without the folder
-reference, the exceptions alone would exclude the SDK from the app
-entirely. `scripts/verify-antigravity-bundle.py` checks both halves,
-the manifest integrity, and the loop-only policy.
+resource build failure this wiring replaced) — and exceptions alone
+(the state between that build fix and this script phase) exclude the
+SDK from the app entirely. A folder reference was tried in between and
+dropped: references pointing *inside* a synchronized root are not a
+reliable copy mechanism. `scripts/verify-antigravity-bundle.py`
+checks the script phase, the exceptions, the manifest integrity, and
+the loop-only policy.
 
 ## Using the vendored SDK directly
 

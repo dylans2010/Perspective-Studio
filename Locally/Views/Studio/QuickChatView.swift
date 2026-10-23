@@ -112,7 +112,10 @@ struct QuickChatView: View {
                 activeSkills: Array(chatViewModel.activeSkills),
                 thinkingEnabled: ThinkingSettings.isEnabled,
                 thinkingBudget: ThinkingSettings.budget,
-                modelDisplayName: model.displayName
+                modelDisplayName: model.displayName,
+                projectContext: AgentProjectsStore.shared.activeProject.map {
+                    AgentProjectsStore.shared.contextBlock(for: $0, includeToolMandate: false)
+                }
             )
         )
         Task {
