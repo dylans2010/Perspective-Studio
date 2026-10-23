@@ -1,6 +1,7 @@
 import XCTest
 @testable import Locally
 
+@MainActor
 final class SystemAssetsManagerTests: XCTestCase {
     @MainActor
     func testAvailableAssetsAndIndexGeneration() async {

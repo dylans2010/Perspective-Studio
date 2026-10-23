@@ -4,6 +4,7 @@ import XCTest
 /// Agent Projects: folder-scoped agent work with per-project memory.
 /// These tests pin the memory ordering, the context block the agent
 /// actually receives, and the store's CRUD round-trip.
+@MainActor
 final class AgentProjectsTests: XCTestCase {
 
     private func sampleProject() -> AgentProject {

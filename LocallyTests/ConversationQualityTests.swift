@@ -12,6 +12,7 @@ import XCTest
 /// history marker as "[Answer withheld]". These tests verify the
 /// routing, retrieval, prompt-assembly, parser, and rendering behavior
 /// structurally — with controlled inputs, not output-length vibes.
+@MainActor
 final class ConversationQualityTests: XCTestCase {
 
     // MARK: - Fixtures
@@ -272,13 +273,13 @@ final class ConversationQualityTests: XCTestCase {
         switch AntigravityLoopEngine.decide(turnText: "Hey! What can I help you with?", knownToolIDs: ["calculator"]) {
         case .finalAnswer(let answer):
             XCTAssertEqual(answer, "Hey! What can I help you with?")
-        case .callTool:
+        case .callTool, .invalidToolCall:
             XCTFail("a plain greeting reply must classify as a final answer")
         }
         switch AntigravityLoopEngine.decide(turnText: "TOOL_CALL {\"tool\": \"calculator\", \"arguments\": {}}", knownToolIDs: ["calculator"]) {
         case .callTool(let toolID, _):
             XCTAssertEqual(toolID, "calculator")
-        case .finalAnswer:
+        case .finalAnswer, .invalidToolCall:
             XCTFail("a genuine tool call must still classify as a tool call — multi-step tasks keep working")
         }
     }

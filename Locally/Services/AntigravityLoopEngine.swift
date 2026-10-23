@@ -24,17 +24,34 @@ public enum AntigravityLoopEngine {
 
     /// What one model turn means for the loop.
     public enum TurnDecision: Sendable, Equatable {
-        /// The model asked to run a tool. The invocation itself is private
-        /// plumbing and is consumed by the loop, never displayed.
+        /// The model asked to run a tool, and the request was validated
+        /// against the registry. The invocation itself is private plumbing and
+        /// is consumed by the loop, never displayed.
         case callTool(toolID: String, arguments: [String: AnyCodableValue])
+        /// The model asked for an action that cannot run: an unregistered
+        /// tool, unreadable payload, or arguments its schema rejects. Nothing
+        /// is executed; the loop feeds the reason back so the model can
+        /// correct itself or report the limitation.
+        case invalidToolCall(toolID: String, rejection: ToolCallRejection)
         /// The model produced its final answer for the user (already
         /// sanitized for display).
         case finalAnswer(String)
+
+        /// Whether this turn was an attempt to act (valid or not). Direct
+        /// turns use this to escalate into the loop.
+        public var isToolAttempt: Bool {
+            switch self {
+            case .callTool, .invalidToolCall: true
+            case .finalAnswer: false
+            }
+        }
 
         public static func == (lhs: TurnDecision, rhs: TurnDecision) -> Bool {
             switch (lhs, rhs) {
             case (.callTool(let aID, let aArgs), .callTool(let bID, let bArgs)):
                 return aID == bID && aArgs == bArgs
+            case (.invalidToolCall(let aID, let aRejection), .invalidToolCall(let bID, let bRejection)):
+                return aID == bID && aRejection == bRejection
             case (.finalAnswer(let a), .finalAnswer(let b)):
                 return a == b
             default:
@@ -43,30 +60,79 @@ public enum AntigravityLoopEngine {
         }
     }
 
-    /// Classifies one raw model turn. A turn that contains a tool
-    /// invocation is a tool turn even when the model surrounded it with
-    /// prose — the prose of a tool turn is discarded by the loop, because
-    /// half-formed explanations of plumbing are how raw invocations used to
-    /// leak into the chat.
-    public nonisolated static func decide(turnText: String, knownToolIDs: Set<String>) -> TurnDecision {
+    /// Classifies one raw model turn against the registry.
+    ///
+    /// A turn is a tool turn **only** when it carries the runtime's tool-call
+    /// channel (`TOOL_CALL …` or a `<tool_call>` wrapper) *and* the requested
+    /// id resolves to a registered tool *and* its arguments match that tool's
+    /// schema. Everything else is a final answer. Prose — including a command
+    /// printed in a fenced code block — is never parsed as an invocation, and
+    /// a mentioned-but-unregistered id is refused rather than dispatched.
+    ///
+    /// A tool turn's prose is discarded by the loop: half-formed explanations
+    /// of plumbing are how raw invocations used to leak into the chat.
+    public nonisolated static func decide(turnText: String, catalog: ToolCatalog) -> TurnDecision {
         if let parsed = AntigravityAgentHarness.parseToolCall(in: turnText) {
             let args = parsed.arguments.mapValues { AnyCodableValue(any: $0) }
-            return .callTool(toolID: parsed.toolId, arguments: args)
+            switch ToolCallValidator.validate(toolID: parsed.toolId, arguments: args, catalog: catalog) {
+            case .accepted(let call):
+                return .callTool(toolID: call.toolID, arguments: call.arguments)
+            case .rejected(let rejection):
+                return .invalidToolCall(toolID: parsed.toolId, rejection: rejection)
+            }
         }
-        return .finalAnswer(cleanFinalAnswer(turnText, knownToolIDs: knownToolIDs))
+        // The model used the tool-call channel but the payload could not be
+        // read. That is an invalid call, not an answer: rendering it would
+        // print protocol text, and executing anything would be a guess.
+        if AntigravityAgentHarness.containsToolCallChannel(turnText) {
+            return .invalidToolCall(toolID: "", rejection: .malformedCall)
+        }
+        return .finalAnswer(cleanFinalAnswer(turnText, knownToolIDs: catalog.ids))
+    }
+
+    /// Ids-only classification (no schemas available). Argument validation is
+    /// skipped; identity is still resolved against the registry, and an
+    /// unregistered id is refused instead of dispatched.
+    public nonisolated static func decide(turnText: String, knownToolIDs: Set<String>) -> TurnDecision {
+        decide(turnText: turnText, catalog: ToolCatalog(permissiveIDs: knownToolIDs))
     }
 
     /// The user-turn text that feeds one tool result back into the loop.
     /// It names the action in human terms only — never the raw tool id —
     /// so even the model's context stops reinforcing id-naming.
-    public nonisolated static func observationPrompt(toolID: String, output: String) -> String {
-        """
+    public nonisolated static func observationPrompt(toolID: String, output: String, success: Bool = true) -> String {
+        let statusLine = success
+            ? ""
+            : "This action FAILED — it is an error result, not an observation. Do not describe it as done; report the failure in plain language and choose a different next step.\n"
+        return """
         Tool result (from \(ToolNameFormatter.format(toolID))):
-        \(output)
+        \(statusLine)\(output)
 
         Analyze this result and proceed to the next step, or provide the final answer if the task is complete. Remember: never mention tool names, ids, or invocation syntax in your answer — describe actions and findings in plain language.
         """
     }
+
+    /// The user turn fed back when the model requested an action that cannot
+    /// run. It states the rule and the specific defect, and pushes the model
+    /// to either make one corrected call or say the capability is missing.
+    public nonisolated static func correctionPrompt(rejection: ToolCallRejection) -> String {
+        """
+        Nothing was executed for your last request. \(rejection.modelFacingExplanation)
+
+        How to act in this runtime:
+        - A tool runs only when you emit exactly one line: TOOL_CALL {"tool": "<registered id>", "arguments": { ... }}
+        - Only call ids that appear in your tool set, or retrieve a tool's exact schema from the context index first. Writing a tool name, a shell command, or a JSON example in prose does nothing — it is not an invocation.
+        - If this runtime has no tool for what the task needs, say so plainly instead of describing the action as if it happened.
+        """
+    }
+
+    /// The user turn fed back when the model *describes* work instead of doing
+    /// it (the "I will run it now" turn with no call attached).
+    public nonisolated static let narrationCorrectionPrompt = """
+    You described an action but did not request one, so nothing ran. Your last reply was not a result.
+
+    Either request the action now as exactly one line — TOOL_CALL {"tool": "<registered id>", "arguments": { ... }} — or, if this runtime has no tool that can do it, tell the user truthfully that it cannot be done here and stop. Never state or imply that an action happened when no tool ran.
+    """
 
     // MARK: - No-progress guard
 
@@ -75,6 +141,65 @@ public enum AntigravityLoopEngine {
     /// third identical request cannot produce new information, and the
     /// old loop happily re-ran it until the turn cap.
     public nonisolated static let maxIdenticalToolExecutions = 2
+
+    /// How many rejected (unregistered / malformed / schema-invalid) calls
+    /// one run may make. The first rejection is fed back as a correction; a
+    /// model that keeps asking for something that cannot run is stopped rather
+    /// than left to burn the turn budget.
+    public nonisolated static let maxRejectedToolCalls = 2
+
+    /// How many consecutive narration-without-action turns one run may make
+    /// before it stops. The first is corrected; a second means the model is
+    /// not going to act, so the run ends with an honest status instead of
+    /// repeating the same paragraph.
+    public nonisolated static let maxNarrationTurns = 2
+
+    /// Upper bound on real tool executions in one run.
+    public nonisolated static let maxToolExecutionsPerRun = 24
+
+    /// First-person future-intent phrases that mark a turn as an announcement
+    /// of pending work. Deliberately narrow: only explicit self-action
+    /// announcements, never ordinary second-person instructions ("you can run
+    /// …") or sign-offs ("let me know").
+    private nonisolated static let pendingActionPhrases: [String] = [
+        "i will now", "i'll now", "i will use", "i'll use", "i am going to", "i'm going to",
+        "i will run", "i'll run", "i will attach", "i'll attach", "i will call", "i'll call",
+        "i will execute", "i'll execute", "i will launch", "i'll launch",
+        "let me run", "let me use", "let me attach", "let me execute", "let me launch",
+        "next, i will", "next i will", "next, i'll", "next i'll", "now i will", "now i'll",
+        "running the command", "attaching the debugger"
+    ]
+
+    /// Words that make an announcement an announcement of *work* (running,
+    /// attaching, invoking a tool) rather than ordinary first-person prose.
+    private nonisolated static let pendingActionMarkers: [String] = [
+        "tool", "command", "terminal", "shell", "debugger", "debug ", "attach",
+        "run ", "runs", "execute", "launch", "bash", "script", "build", "xcodebuild"
+    ]
+
+    /// True when the text announces work the model is about to do rather than
+    /// reporting work that was done. Used by the loop to refuse an
+    /// announcement as a final answer: an announced action that was never
+    /// requested through the tool channel is not a completed task.
+    ///
+    /// Deliberately narrow: a first-person future phrase *and* an action marker
+    /// (a fenced block, or a command/execution word). "I will now summarize the
+    /// findings" is an answer, not an announcement of pending work.
+    public nonisolated static func describesPendingAction(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        guard pendingActionPhrases.contains(where: { lowered.contains($0) }) else { return false }
+        if text.contains("```") { return true }
+        return pendingActionMarkers.contains { lowered.contains($0) }
+    }
+
+    /// A narration signature for no-progress detection: the same announcement
+    /// repeated cannot start producing results.
+    public nonisolated static func narrationSignature(_ text: String) -> String {
+        let words = text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        return "narration|" + words.joined(separator: " ")
+    }
 
     /// Canonical signature of one tool call for repetition detection.
     /// `canonicalArguments` must be a deterministic rendering of the
@@ -122,13 +247,22 @@ public nonisolated enum AnyCodableValue: Sendable, Equatable {
     case object([String: AnyCodableValue])
 
     public nonisolated init(any value: Any) {
+        // NSNumber must be inspected before Bool: JSON numbers bridge to
+        // Bool on Apple platforms, so `NSNumber(value: 1) as? Bool` succeeds
+        // and an integer argument would silently become `true`.
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                self = .bool(number.boolValue)
+            } else {
+                self = .number(number.doubleValue)
+            }
+            return
+        }
         switch value {
         case let string as String:
             self = .string(string)
         case let bool as Bool:
             self = .bool(bool)
-        case let number as NSNumber:
-            self = .number(number.doubleValue)
         case let array as [Any]:
             self = .array(array.map { AnyCodableValue(any: $0) })
         case let object as [String: Any]:

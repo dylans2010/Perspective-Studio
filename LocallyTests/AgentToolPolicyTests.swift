@@ -3,6 +3,7 @@ import XCTest
 
 /// The Project Tool Mandate: with a project active, a final answer is
 /// only acceptable after at least one tool has actually run.
+@MainActor
 final class AgentToolPolicyTests: XCTestCase {
 
     func testToolLessAnswerInProjectIsRejected() {

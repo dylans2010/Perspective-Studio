@@ -20,7 +20,7 @@ tags: style, formatting, markdown, communication, precision
 - **Tables & Lists**: Use markdown tables for structured feature comparisons, option matrices, or schema summaries. Use ordered lists for sequential steps and bullet points for unordered items.
 
 ## 3. Inline Symbols & Notation
-- **Code Identifiers in Backticks**: Wrap symbol names, file paths, parameters, types, and terminal commands in inline backticks (e.g., `` `SystemAssetsManager` ``, `` `run_command` ``, `` `Locally/Services/` ``).
+- **Code Identifiers in Backticks**: Wrap symbol names, file paths, parameters, types, and commands in inline backticks (e.g., `` `SystemAssetsManager` ``, `` `MarkdownContentView` ``, `` `Locally/Services/` ``). Backticks mark code, never an action you took.
 - **GitHub-Style Callouts**: Use alerts sparingly to highlight crucial caveats or security notes:
   - `> [!NOTE]` for helpful context.
   - `> [!TIP]` for efficiency or optimization suggestions.

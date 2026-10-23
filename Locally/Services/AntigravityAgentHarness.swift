@@ -43,6 +43,10 @@ public struct AgentStep: Identifiable, Sendable {
     public let toolName: String?
     public let toolArguments: [String: Any]?
     public let toolResult: AssistToolResult?
+    /// The identifier of the tool-call record this step belongs to, so a call
+    /// and its result can be tied together even when the model makes several
+    /// calls with the same tool in one run.
+    public let callID: String?
 
     public enum StepKind: String, Sendable, Codable {
         case thought
@@ -61,7 +65,8 @@ public struct AgentStep: Identifiable, Sendable {
         rawPayload: String? = nil,
         toolName: String? = nil,
         toolArguments: [String: Any]? = nil,
-        toolResult: AssistToolResult? = nil
+        toolResult: AssistToolResult? = nil,
+        callID: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -72,6 +77,7 @@ public struct AgentStep: Identifiable, Sendable {
         self.toolName = toolName
         self.toolArguments = toolArguments
         self.toolResult = toolResult
+        self.callID = callID
     }
 }
 
@@ -84,6 +90,9 @@ public enum AgentHarnessEvent: Sendable {
     case toolCallDetected(tool: String, arguments: [String: Any])
     case toolExecutionStarted(tool: String)
     case toolExecutionFinished(tool: String, result: AssistToolResult)
+    /// The structured record for one call, updated in place (running →
+    /// completed/failed) so UI surfaces never have to infer status from text.
+    case toolCallRecordUpdated(ToolCallRecord)
     case completed(answer: String, steps: [AgentStep])
     case failed(String)
 }
@@ -144,6 +153,10 @@ public final class AntigravityAgentHarness {
     public private(set) var currentThought: String = ""
     public private(set) var isRunning: Bool = false
     public private(set) var activeToolName: String? = nil
+    /// Structured records of every tool call this run attempted to execute:
+    /// canonical tool id, validated arguments, status, real result, duration.
+    /// Rejected calls never appear here — nothing was executed for them.
+    public private(set) var toolCallRecords: [ToolCallRecord] = []
 
     private var activeTask: Task<Void, Never>?
 
@@ -173,6 +186,8 @@ public final class AntigravityAgentHarness {
         workspaceRoot: URL = URL.documentsDirectory,
         projectID: UUID? = nil,
         maxTurns: Int = 10,
+        maxToolExecutions: Int = AntigravityLoopEngine.maxToolExecutionsPerRun,
+        toolTimeout: Duration = ToolExecutor.defaultTimeout,
         backend: (any InferenceBackend)? = nil,
         additionalSystemPrompt: String? = nil,
         onEvent: (@MainActor (AgentHarnessEvent) -> Void)? = nil
@@ -180,9 +195,12 @@ public final class AntigravityAgentHarness {
         cancel()
         isRunning = true
         steps = []
+        toolCallRecords = []
         currentThought = ""
         status = .thinking
         activeToolName = nil
+        let turnBudget = max(1, min(maxTurns, 32))
+        let executionBudget = max(1, maxToolExecutions)
 
         let dispatchStatus: @MainActor (AgentHarnessStatus) -> Void = { [weak self] newStatus in
             guard let self else { return }
@@ -202,6 +220,12 @@ public final class AntigravityAgentHarness {
         }
 
         let selectedBackend = backend ?? InferenceBackends.default
+
+        // The registry snapshot this run validates every requested call
+        // against. Taken once, at the start: the registry stays the source of
+        // truth, and the loop never invents a tool or an argument key.
+        let catalog = ToolCatalog(tools: ToolsRegistry.shared.allTools)
+        let knownToolIDs = catalog.ids
 
         // 0. Verify the bundled Antigravity SDK before anything else.
         // Agent mode runs on this SDK's loop in EVERY configuration (the
@@ -315,10 +339,11 @@ public final class AntigravityAgentHarness {
                 return ("", nil, false)
             }
             let split = AntigravityLoopEngine.splitThinking(from: text)
-            if case .callTool = AntigravityLoopEngine.decide(turnText: split.answer, knownToolIDs: ToolsRegistry.shared.allToolIDs) {
+            let decision = AntigravityLoopEngine.decide(turnText: split.answer, catalog: catalog)
+            if decision.isToolAttempt {
                 return ("", split.thinking, true)
             }
-            let cleaned = AntigravityLoopEngine.cleanFinalAnswer(split.answer, knownToolIDs: ToolsRegistry.shared.allToolIDs)
+            let cleaned = AntigravityLoopEngine.cleanFinalAnswer(split.answer, knownToolIDs: knownToolIDs)
             return (cleaned, split.thinking, false)
         }
 
@@ -392,6 +417,15 @@ public final class AntigravityAgentHarness {
         /// Canonical signatures of tool calls already executed this run —
         /// the no-progress guard (`AntigravityLoopEngine.isNoProgressRepeat`).
         var executedSignatures: [String] = []
+        /// Requests the validator refused (unregistered ids, malformed
+        /// payloads, schema-invalid arguments). Each is fed back as a
+        /// correction; the run stops when they stop being corrective.
+        var rejectedToolCalls = 0
+        /// Turn announcements that described work without requesting it.
+        var narrationTurns = 0
+        var narrationSignatures: [String] = []
+        /// The last refusal, so a stopped run can say what went wrong.
+        var lastRejection: ToolCallRejection?
         /// Consecutive empty model turns; bounded, then the run stops
         /// honestly instead of spinning to the turn cap.
         var emptyTurns = 0
@@ -401,7 +435,7 @@ public final class AntigravityAgentHarness {
         var loopStoppedReason: String?
 
         // 3. Multi-turn Agent Loop
-        loop: while turnCount < maxTurns && !Task.isCancelled {
+        loop: while turnCount < turnBudget && !Task.isCancelled {
             turnCount += 1
             dispatchStatus(.thinking)
             currentThought = ""
@@ -423,6 +457,13 @@ public final class AntigravityAgentHarness {
                     }
                 }
             } catch {
+                // A cancelled run is a cancellation, not a model error: report
+                // it as such so the UI never blames inference for the user's
+                // stop.
+                if Task.isCancelled {
+                    dispatchStatus(.idle)
+                    return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
+                }
                 let msg = "Inference generation error: \(error.localizedDescription)"
                 dispatchStatus(.failed(msg))
                 let errStep = AgentStep(kind: .error, title: "Inference Error", detail: msg)
@@ -447,22 +488,19 @@ public final class AntigravityAgentHarness {
             // 4. Classify the turn with the loop engine. Tool turns are
             // consumed entirely by the loop: their text (which contains the
             // raw invocation) is never forwarded to the chat as a message.
-            switch AntigravityLoopEngine.decide(turnText: turnResponse, knownToolIDs: ToolsRegistry.shared.allToolIDs) {
+            switch AntigravityLoopEngine.decide(turnText: turnResponse, catalog: catalog) {
             case .callTool(let toolId, let codableArgs):
-                let args = codableArgs.mapValues { $0.anyValue }
+                // Execution budget: a run may not spin through tools forever.
+                guard toolCallsExecuted < executionBudget else {
+                    loopStoppedReason = "I stopped this run at the tool limit (\(executionBudget) actions). The steps from this run show what was executed; anything after the limit did not run."
+                    break loop
+                }
 
                 // No-progress guard: the same tool with the same
                 // arguments cannot produce new information a third time.
                 // Stop and say so instead of burning the turn budget.
-                let canonicalArgs: String = {
-                    if let data = try? JSONSerialization.data(withJSONObject: args, options: [.sortedKeys]),
-                       let string = String(data: data, encoding: .utf8) {
-                        return string
-                    }
-                    return formatArgumentsPreview(args)
-                }()
-                let signature = AntigravityLoopEngine.toolCallSignature(toolID: toolId, canonicalArguments: canonicalArgs)
-                if AntigravityLoopEngine.isNoProgressRepeat(signature: signature, previousSignatures: executedSignatures) {
+                let validated = ValidatedToolCall(toolID: toolId, toolName: ToolNameFormatter.format(toolId), arguments: codableArgs)
+                if AntigravityLoopEngine.isNoProgressRepeat(signature: validated.signature, previousSignatures: executedSignatures) {
                     addStep(AgentStep(
                         kind: .thought,
                         title: "Repeated Action Stopped",
@@ -471,47 +509,92 @@ public final class AntigravityAgentHarness {
                     loopStoppedReason = "I stopped this run because the same step was repeated with identical inputs and could not make further progress. \(toolCallsExecuted) tool step(s) ran before that — the steps from this run show what was done."
                     break loop
                 }
-                executedSignatures.append(signature)
+                guard let tool = ToolsRegistry.shared.tool(for: toolId) else {
+                    // The catalog and the registry are built from the same
+                    // source; a miss here means the registry changed mid-run.
+                    rejectedToolCalls += 1
+                    conversationTurns.append(Turn(role: "user", content: AntigravityLoopEngine.correctionPrompt(rejection: .unknownTool(toolId))))
+                    if rejectedToolCalls >= AntigravityLoopEngine.maxRejectedToolCalls {
+                        loopStoppedReason = "I stopped this run because the action it requested is no longer available. Nothing further was executed."
+                        break loop
+                    }
+                    continue
+                }
+                executedSignatures.append(validated.signature)
                 toolCallsExecuted += 1
+                narrationTurns = 0
+
+                let args = codableArgs
+                let preview = sanitizedArgumentPreview(args)
+                var record = ToolCallRecord(
+                    toolID: toolId,
+                    arguments: preview,
+                    status: .running,
+                    startedAt: .now
+                )
+                toolCallRecords.append(record)
+                onEvent?(.toolCallRecordUpdated(record))
 
                 self.activeToolName = toolId
                 dispatchStatus(.callingTool(name: toolId))
-                onEvent?(.toolCallDetected(tool: toolId, arguments: args))
+                onEvent?(.toolCallDetected(tool: toolId, arguments: args.mapValues(\.anyValue)))
                 onEvent?(.toolExecutionStarted(tool: toolId))
 
                 let callStep = AgentStep(
                     kind: .toolCall,
                     title: ToolNameFormatter.format(toolId),
-                    detail: formatArgumentsPreview(args),
+                    detail: formatArgumentsPreview(args.mapValues(\.anyValue)),
                     rawPayload: turnResponse,
                     toolName: toolId,
-                    toolArguments: args
+                    toolArguments: args.mapValues(\.anyValue),
+                    callID: record.id.uuidString
                 )
                 addStep(callStep)
 
-                // Execute via ToolsRegistry
-                let result: AssistToolResult
-                do {
-                    result = try await ToolsRegistry.shared.execute(
-                        toolId: toolId,
-                        arguments: args,
-                        context: assistContext
-                    )
-                } catch {
-                    result = .failure(error.localizedDescription, code: .executionFailed)
+                // Execute the real implementation, bounded by the run's
+                // per-call timeout. A throw or a timeout is a failure result,
+                // never a fabricated success.
+                let execution = await ToolExecutor.execute(
+                    tool: tool,
+                    arguments: args,
+                    context: assistContext,
+                    timeout: toolTimeout
+                )
+                let result = execution.result
+
+                record.status = result.success ? .completed : .failed(result.error ?? "Execution failed")
+                record.result = result.output
+                record.duration = execution.duration
+                record.completedAt = .now
+                if let index = toolCallRecords.firstIndex(where: { $0.id == record.id }) {
+                    toolCallRecords[index] = record
                 }
+                onEvent?(.toolCallRecordUpdated(record))
 
                 dispatchStatus(.toolCompleted(name: toolId))
                 onEvent?(.toolExecutionFinished(tool: toolId, result: result))
 
-                let resultStep = AgentStep(
-                    kind: .toolResult,
-                    title: result.success ? ToolNameFormatter.completedTitle(for: toolId) : "\(ToolNameFormatter.format(toolId)) Failed",
-                    detail: result.output,
-                    toolName: toolId,
-                    toolResult: result
-                )
-                addStep(resultStep)
+                if !result.success {
+                    // A failed call is not a completed step. The model is told
+                    // exactly that, so it cannot report the action as done.
+                    addStep(AgentStep(
+                        kind: .error,
+                        title: "\(ToolNameFormatter.format(toolId)) Failed",
+                        detail: result.error ?? result.output,
+                        toolName: toolId,
+                        toolResult: result,
+                        callID: record.id.uuidString
+                    ))
+                } else {
+                    addStep(AgentStep(
+                        kind: .toolResult,
+                        title: ToolNameFormatter.completedTitle(for: toolId),
+                        detail: result.output,
+                        toolName: toolId,
+                        toolResult: result,
+                        callID: record.id.uuidString
+                    ))
+                }
 
                 // Feed tool result back into conversation turns. The
                 // assistant turn is recorded as a neutral marker, not the
@@ -523,10 +606,36 @@ public final class AntigravityAgentHarness {
                 conversationTurns.append(Turn(role: "assistant", content: "I completed a step using a tool."))
                 conversationTurns.append(Turn(
                     role: "user",
-                    content: AntigravityLoopEngine.observationPrompt(toolID: toolId, output: result.output)
+                    content: AntigravityLoopEngine.observationPrompt(toolID: toolId, output: result.output, success: result.success)
                 ))
 
                 self.activeToolName = nil
+
+            case .invalidToolCall(_, let rejection):
+                // Nothing was executed. The turn's text (the model's own
+                // description of what it meant to do) is never forwarded as a
+                // message, and no result is invented. The loop feeds back a
+                // correction naming the defect; a model that keeps requesting
+                // unusable actions is stopped instead of looped.
+                rejectedToolCalls += 1
+                lastRejection = rejection
+                addStep(AgentStep(
+                    kind: .error,
+                    title: "Action Not Executed",
+                    detail: rejection.userFacingSummary
+                ))
+                conversationTurns.append(Turn(role: "assistant", content: "That action did not run."))
+                conversationTurns.append(Turn(
+                    role: "user",
+                    content: AntigravityLoopEngine.correctionPrompt(rejection: rejection)
+                ))
+                if rejectedToolCalls >= AntigravityLoopEngine.maxRejectedToolCalls {
+                    let reason = lastRejection?.userFacingSummary ?? "The request could not be executed."
+                    loopStoppedReason = "I stopped this run because the model kept requesting actions this app cannot execute. \(reason) \(toolCallsExecuted) tool step(s) ran before that — nothing else was executed."
+                    break loop
+                }
+                continue
+
             case .finalAnswer(let answer):
                 // The answer text with its reasoning removed — the
                 // reasoning was already captured as a thought step above,
@@ -550,6 +659,31 @@ public final class AntigravityAgentHarness {
                     break loop
                 }
                 emptyTurns = 0
+
+                // Narration is not execution. A turn that announces work
+                // ("I will run it now") without requesting it through the
+                // tool channel is not a result: the model is corrected once,
+                // and a second announcement stops the run with a status that
+                // says plainly nothing ran. This is what used to let a model
+                // print a command in a code block and call it done.
+                if AntigravityLoopEngine.describesPendingAction(cleanAnswer) {
+                    narrationTurns += 1
+                    let narrationSignature = AntigravityLoopEngine.narrationSignature(cleanAnswer)
+                    let repeatedNarration = narrationSignatures.filter { $0 == narrationSignature }.count
+                    narrationSignatures.append(narrationSignature)
+                    addStep(AgentStep(
+                        kind: .thought,
+                        title: "Action Described, Not Taken",
+                        detail: "The model described an action instead of requesting it. Only a real tool call executes, so nothing was run for that turn."
+                    ))
+                    if narrationTurns >= AntigravityLoopEngine.maxNarrationTurns || repeatedNarration >= 1 {
+                        loopStoppedReason = "I stopped this run because the model kept describing actions instead of performing them: nothing it described was executed. Only real tool calls run in this app, and \(toolCallsExecuted) tool step(s) did run before the repetition."
+                        break loop
+                    }
+                    conversationTurns.append(Turn(role: "assistant", content: "I described an action without taking it."))
+                    conversationTurns.append(Turn(role: "user", content: AntigravityLoopEngine.narrationCorrectionPrompt))
+                    continue
+                }
 
                 // Project Tool Mandate: with a project active, a final
                 // answer is only acceptable after the agent has actually
@@ -609,7 +743,7 @@ public final class AntigravityAgentHarness {
             finalAnswer = Task.isCancelled
                 ? "Execution was cancelled."
                 : (loopStoppedReason
-                    ?? "I reached the step limit (\(maxTurns) turns) before finishing this task. \(toolCallsExecuted) tool step(s) ran — the steps from this run show what was done, and nothing further was executed.")
+                    ?? "I reached the step limit (\(turnBudget) turns) before finishing this task. \(toolCallsExecuted) tool step(s) ran — the steps from this run show what was done, and nothing further was executed.")
             addStep(AgentStep(kind: .finalAnswer, title: "Run Stopped", detail: finalAnswer))
         }
 
@@ -667,9 +801,15 @@ public final class AntigravityAgentHarness {
         1. When a task requires external data, system verification, or computation, use the available tools.
         2. To call a tool, output ONLY a single line in this exact JSON format:
            TOOL_CALL {"tool": "<tool_id>", "arguments": { ... }}
+           ids that are not registered are rejected and nothing runs — retrieve a tool's schema from the context index first if you are unsure.
         3. Do not include extra conversational text on the line of a TOOL_CALL.
         4. When the tool returns its result, analyze the observations and either call the next tool or give the final answer.
         5. When you have gathered enough information or the task is finished, respond directly to the user (no tool call syntax), with a response proportionate to the task — a short task gets a short answer.
+
+        ## What Can Actually Run
+        - Only the tools in this run's tool set execute. There is no shell, terminal, debugger, or arbitrary-command capability unless a tool for it appears in that set; writing a command (or a name like a debugger) in prose or a code block does not run it.
+        - An action happens only when you emit a tool call through the channel above. Describing, promising, or showing an action is not performing it.
+        - Never claim to have opened something, run something, changed a file, or inspected a process unless a tool result from this run shows it. If the capability the task needs is missing here, say so plainly and stop.
 
         ## Tool Secrecy — Absolute Rules (never break these):
         - Tool ids, the TOOL_CALL syntax, and JSON invocation payloads are a private protocol between you and the runtime. The user NEVER sees them: the app shows your tool activity separately in its own tool cards.
@@ -773,6 +913,20 @@ public final class AntigravityAgentHarness {
         return assembled
     }
 
+    /// Arguments as they appear in the run record and the call card: string
+    /// values verbatim (bounded), everything else rendered plainly. The model's
+    /// raw payload is never shown as message text.
+    private func sanitizedArgumentPreview(_ args: [String: AnyCodableValue]) -> [String: String] {
+        let limit = 200
+        return args.mapValues { value in
+            let text: String = {
+                if case .string(let string) = value { return string }
+                return String(describing: value.anyValue)
+            }()
+            return text.count > limit ? String(text.prefix(limit)) + "…" : text
+        }
+    }
+
     private func formatArgumentsPreview(_ args: [String: Any]) -> String {
         guard !args.isEmpty else { return "No arguments" }
         if let data = try? JSONSerialization.data(withJSONObject: args, options: [.prettyPrinted, .sortedKeys]),
@@ -784,10 +938,19 @@ public final class AntigravityAgentHarness {
 
     // MARK: - Tool Call Parser
 
-    /// Extracts tool calls from model output in either standard `TOOL_CALL` syntax or JSON payloads.
+    /// Extracts a tool request from the runtime's tool-call channel only.
+    ///
+    /// The channel is the `TOOL_CALL` marker (optionally followed by one JSON
+    /// object) and the `<tool_call>` / `<function_call>` wrappers — the formats
+    /// chat templates and the system prompt actually use for calling tools.
+    ///
+    /// Plain prose is never scanned for JSON: a command in a fenced block, a
+    /// config example, or a sentence naming a tool is *content*, and treating
+    /// it as an invocation is how a model's description of work used to become
+    /// an executed call. Extraction here is purely syntactic — identity and
+    /// arguments are validated afterwards by `ToolCallValidator`.
     public nonisolated static func parseToolCall(in text: String) -> (toolId: String, arguments: [String: Any])? {
-        // 1. Explicit TOOL_CALL token
-        if let marker = text.range(of: "TOOL_CALL") {
+        if let marker = text.range(of: "TOOL_CALL", options: .caseInsensitive) {
             let remainder = text[marker.upperBound...]
             if let start = remainder.firstIndex(of: "{"),
                let data = balancedJSON(in: remainder[start...]),
@@ -796,24 +959,30 @@ public final class AntigravityAgentHarness {
             }
         }
 
-        // 2. Markdown fenced code block containing a tool call
-        if let blockStart = text.range(of: "```json"),
-           let blockEnd = text.range(of: "```", range: blockStart.upperBound..<text.endIndex) {
-            let jsonSlice = text[blockStart.upperBound..<blockEnd.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            if let data = jsonSlice.data(using: .utf8),
+        // XML-style wrapper a chat template may emit around the call.
+        for tag in ["tool_call", "function_call", "tool_calls", "function_calls"] {
+            guard let open = text.range(of: "<\(tag)", options: .caseInsensitive) else { continue }
+            let body = text[open.upperBound...]
+            if let start = body.firstIndex(of: "{"),
+               let data = balancedJSON(in: body[start...]),
                let parsed = decodeToolCallData(data) {
                 return parsed
             }
         }
 
-        // 3. Raw JSON object containing "tool" and "arguments"
-        if let firstBrace = text.firstIndex(of: "{"),
-           let data = balancedJSON(in: text[firstBrace...]),
-           let parsed = decodeToolCallData(data) {
-            return parsed
-        }
-
         return nil
+    }
+
+    /// True when the text contains the tool-call channel but its payload could
+    /// not be read. Such a turn is an invalid call (refused, corrected), never
+    /// an answer: printing it would leak protocol text and executing it would
+    /// be guesswork.
+    public nonisolated static func containsToolCallChannel(_ text: String) -> Bool {
+        if text.range(of: "TOOL_CALL", options: .caseInsensitive) != nil { return true }
+        for tag in ["tool_call", "function_call"] where text.range(of: "<\(tag)", options: .caseInsensitive) != nil {
+            return true
+        }
+        return false
     }
 
     private nonisolated static func decodeToolCallData(_ data: Data) -> (toolId: String, arguments: [String: Any])? {

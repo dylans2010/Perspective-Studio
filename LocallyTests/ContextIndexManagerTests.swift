@@ -5,6 +5,7 @@ import XCTest
 /// indexed locally, prompts get a counts-only directory plus a small
 /// budgeted bundle of retrieved excerpts, and project memory can never
 /// enter a Chat-mode index. These tests pin that contract.
+@MainActor
 final class ContextIndexManagerTests: XCTestCase {
 
     // MARK: - Fixtures

@@ -577,12 +577,24 @@ final class ChatViewModel {
                 // answer overwrites the bubble at the end regardless).
                 rawStreamed = ""
                 assistantMessage.content = ""
+                // The MLX loop publishes a structured record for the call
+                // (`toolCallRecordUpdated`); this is the fallback for paths
+                // that only announce the call.
+                guard !self.liveToolCalls.contains(where: { $0.toolID == tool && $0.status == .running }) else { return }
                 var strArgs: [String: String] = [:]
                 for (k, v) in arguments {
                     strArgs[k] = "\(v)"
                 }
                 let record = ToolCallRecord(toolID: tool, arguments: strArgs, status: .running)
                 self.liveToolCalls.append(record)
+            case .toolCallRecordUpdated(let record):
+                // The authoritative, structured record for one call: status,
+                // real result, and duration as the loop measured them.
+                if let index = self.liveToolCalls.firstIndex(where: { $0.id == record.id }) {
+                    self.liveToolCalls[index] = record
+                } else {
+                    self.liveToolCalls.append(record)
+                }
             case .toolExecutionFinished(let tool, let result):
                 if let index = self.liveToolCalls.lastIndex(where: { $0.toolID == tool && $0.status == .running }) {
                     var updated = self.liveToolCalls[index]
@@ -632,11 +644,17 @@ final class ChatViewModel {
             )
         }
 
+        // Prefer the loop's structured records: one per executed call, with
+        // its real status and duration. Step-derived records remain the
+        // fallback for the Apple-model path, which reports through events.
+        let structuredRecords = AntigravityAgentHarness.shared.toolCallRecords
         let stepRecords: [ToolCallRecord] = outcome.steps
             .filter { $0.kind == .toolCall || $0.kind == .toolResult }
             .map { ToolCallRecord(agentStep: $0) }
 
-        let finalRecords = !stepRecords.isEmpty ? stepRecords : self.liveToolCalls
+        let finalRecords = !structuredRecords.isEmpty
+            ? structuredRecords
+            : (!stepRecords.isEmpty ? stepRecords : self.liveToolCalls)
         self.messageToolCalls[assistantMessage.id] = finalRecords
         self.liveToolCalls = []
 

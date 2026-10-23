@@ -6,6 +6,7 @@ import CryptoKit
 /// and the loop-only policy (no executable model/tool runtime in the
 /// bundle) is enforced by `AntigravitySDKBundle.status(directory:)`.
 /// These tests build synthetic bundles in a temp folder and pin both.
+@MainActor
 final class AntigravitySDKBundleTests: XCTestCase {
 
     private var tempDir: URL!

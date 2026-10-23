@@ -5,6 +5,7 @@ import XCTest
 /// protocol and the user's screen. These tests pin the exact leak from the
 /// 2026-10-23 screenshots (a bare invocation JSON rendered as the
 /// assistant's message) plus the surrounding cases.
+@MainActor
 final class ToolInvocationSanitizerTests: XCTestCase {
 
     private let knownIDs: Set<String> = [

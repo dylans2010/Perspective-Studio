@@ -53,6 +53,13 @@ nonisolated struct AssistToolBridge: Tool {
         let result = try await registry.execute(toolId: toolID, arguments: input, context: context)
 
         onEvent?(.finished(toolID: toolID, result: result))
+
+        // A failed call must reach the model as an error, not as ordinary
+        // output it can summarize into a success story. The framework's tool
+        // result channel is this return value, so the failure is stated there.
+        guard result.success else {
+            return "ERROR — this action did not complete successfully: \(result.error ?? result.output)\nDo not describe it as done. Report the failure in plain language and choose a different next step."
+        }
         return result.output
     }
 }

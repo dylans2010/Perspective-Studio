@@ -6,6 +6,7 @@ import XCTest
 /// tests pin that contract for both modes — including that Chat mode can
 /// never receive project context/memory, and that an overfed retrieved
 /// bundle is truncated to the mode's cap.
+@MainActor
 final class ModelContextBuilderTests: XCTestCase {
 
     private let directoryFixture = """

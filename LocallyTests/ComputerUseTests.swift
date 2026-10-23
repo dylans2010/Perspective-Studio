@@ -10,6 +10,7 @@ import XCTest
 /// real ScreenCaptureKit capture, CGEvent delivery into another app)
 /// cannot be proven by unit tests and is covered by the manual
 /// end-to-end checklist on Dylan's Mac — these tests never fake it.
+@MainActor
 final class ComputerUseTests: XCTestCase {
 
     // MARK: - Fixtures
