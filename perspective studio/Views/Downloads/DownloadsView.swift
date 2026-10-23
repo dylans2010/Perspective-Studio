@@ -19,11 +19,6 @@ struct DownloadsView: View {
         var id: String { rawValue }
     }
 
-    private var hubCacheDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub")
-    }
-
     private var totalLocalSizeFormatted: String {
         let total = downloadedModels.reduce(Int64(0)) { $0 + $1.sizeBytes }
         return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
@@ -347,24 +342,16 @@ struct DownloadsView: View {
 
     private func scanLocalDownloads() async {
         isScanningLocal = true
-        let hubDir = hubCacheDirectory
         let list = await Task.detached(priority: .userInitiated) {
-            let fm = FileManager.default
-            guard let entries = try? fm.contentsOfDirectory(atPath: hubDir.path()) else {
-                return [LocalDiskModel]()
-            }
             var result: [LocalDiskModel] = []
-            for entry in entries {
-                guard entry.hasPrefix("models--") else { continue }
-                let parts = entry.dropFirst("models--".count).split(separator: "--", maxSplits: 1)
+            for modelId in HFHubCache.cachedModelIDs() {
+                let parts = modelId.split(separator: "/", maxSplits: 1)
                 guard parts.count == 2 else { continue }
                 let author = String(parts[0])
                 let modelName = String(parts[1])
-                let modelId = "\(author)/\(modelName)"
-                let modelDir = hubDir.appendingPathComponent(entry)
-                let blobsDir = modelDir.appendingPathComponent("blobs")
-                let size = Self.calculateDirSize(at: blobsDir, fm: fm)
+                let modelDir = HFHubCache.modelDirectory(for: modelId)
                 let validation = ModelArtifactValidator.validate(modelID: modelId)
+                let size = validation.totalBytes
 
                 result.append(LocalDiskModel(
                     id: modelId,

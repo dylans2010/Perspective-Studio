@@ -69,3 +69,27 @@ HF manifest logic is verified live against the HF API. Building, running the tes
 suite, and the download→load→generate proof with
 `mlx-community/Qwen2.5-0.5B-Instruct-4bit` must run on Dylan's Mac — see the completion
 report checklist. Nothing is claimed as compiled or run until that happens.
+
+## Addendum (2026-10-22, later): the deeper root cause — wrong cache location
+
+The first fix enumerated and validated the right files but wrote them to the
+Python-style hub cache (`~/.cache/huggingface/hub/models--…/blobs + snapshots`).
+Verifying against the *pinned library sources* (mlx-swift-lm 2.30.6,
+swift-transformers 1.1.9) showed the engine never reads that location:
+
+- `MLXLMCommon.defaultHubApi` = `HubApi(downloadBase: ~/Library/Caches)`, and
+  `HubApi.localRepoLocation` = `<base>/models/<org>/<name>` — real files, side
+  by side, no blobs/symlinks.
+- Each file needs a `.cache/huggingface/download/<path>.metadata` record
+  (commit hash / etag / timestamp). `HubApi.snapshot` in offline mode throws
+  unless every (non-hidden) file has one and every LFS file's SHA-256 matches
+  its recorded etag; online, a file whose recorded commit hash matches is
+  reused without re-downloading.
+
+So the downloader, validator, manifests, and every cache scan/delete in the
+app were moved to that layout: files download as real files into
+`~/Library/Caches/models/<org>/<name>/`, a `.metadata` record is written or
+refreshed for every file, the app manifest lives outside the model directory
+(Application Support), and "installed" validation mirrors the engine's offline
+rules. Models MLX itself downloaded earlier are in this location already and
+are now detected correctly.

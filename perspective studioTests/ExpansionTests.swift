@@ -33,9 +33,27 @@ final class ExpansionTests: XCTestCase {
         XCTAssertEqual(decoded.totalBytes, 783 + 278_064_920)
     }
 
-    func testCacheEntryDecoding() {
-        XCTAssertEqual(HFHubCache.modelID(fromCacheEntry: "models--mlx-community--Qwen2.5-0.5B-Instruct-4bit"), "mlx-community/Qwen2.5-0.5B-Instruct-4bit")
-        XCTAssertNil(HFHubCache.modelID(fromCacheEntry: "something-else"))
+    func testModelDirectoryMatchesEngineCacheLayout() {
+        // The engine (MLX Swift LM's defaultHubApi) loads from
+        // ~/Library/Caches/models/<org>/<name> — downloads must land there.
+        let dir = HFHubCache.modelDirectory(for: "mlx-community/Qwen2.5-0.5B-Instruct-4bit")
+        XCTAssertTrue(dir.path.hasSuffix("Library/Caches/models/mlx-community/Qwen2.5-0.5B-Instruct-4bit"), dir.path)
+        let metadata = HFHubCache.metadataURL(for: "mlx-community/Qwen2.5-0.5B-Instruct-4bit", relativePath: "config.json")
+        XCTAssertTrue(metadata.path.hasSuffix(".cache/huggingface/download/config.json.metadata"), metadata.path)
+    }
+
+    func testHubMetadataFormatMatchesEngineExpectations() {
+        // HubApi.readDownloadMetadata requires >= 3 lines and a numeric
+        // timestamp; offline mode additionally hash-checks LFS etags.
+        let content = HubDownloadMetadata.content(
+            commitHash: "a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3",
+            etag: "ddffab9cbc7bf6dde941c6724841eeca8981fcfa81ca20ff8efff1396326d153",
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let lines = content.components(separatedBy: "\n")
+        XCTAssertEqual(lines[0], "a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3")
+        XCTAssertEqual(lines[1], "ddffab9cbc7bf6dde941c6724841eeca8981fcfa81ca20ff8efff1396326d153")
+        XCTAssertNotNil(Double(lines[2]))
     }
 
     // MARK: - Knowledge base

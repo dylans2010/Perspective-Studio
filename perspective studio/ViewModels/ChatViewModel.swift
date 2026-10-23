@@ -542,23 +542,12 @@ final class ChatViewModel {
     }
 
     func scanInstalledModels() {
-        let fm = FileManager.default
-        let hubDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub")
-
-        guard let entries = try? fm.contentsOfDirectory(atPath: hubDir.path()) else {
-            installedModels = []
-            return
-        }
-
         var found: [InstalledModel] = []
-        for entry in entries {
-            guard entry.hasPrefix("models--") else { continue }
-            let parts = entry.dropFirst("models--".count).split(separator: "--", maxSplits: 1)
+        for modelId in HFHubCache.cachedModelIDs() {
+            let parts = modelId.split(separator: "/", maxSplits: 1)
             guard parts.count == 2 else { continue }
             let author = String(parts[0])
             let modelName = String(parts[1])
-            let modelId = "\(author)/\(modelName)"
 
             // Only *complete* models count as installed. A partial download
             // (missing shards / tokenizer / config) must never reach the loader.

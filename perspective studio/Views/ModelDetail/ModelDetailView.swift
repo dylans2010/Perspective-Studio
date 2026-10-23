@@ -85,11 +85,7 @@ struct ModelDetailView: View {
     }
 
     private func removeDownloadedModel() {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub")
-        let encoded = model.id.replacingOccurrences(of: "/", with: "--")
-        let modelDir = cacheDir.appendingPathComponent("models--\(encoded)")
-        try? FileManager.default.removeItem(at: modelDir)
+        try? FileManager.default.removeItem(at: HFHubCache.modelDirectory(for: model.id))
         downloadCheckID = UUID()
     }
 

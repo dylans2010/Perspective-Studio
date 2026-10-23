@@ -167,13 +167,12 @@ final class ToolRegistry {
     }
 
     private static func modelLibrarySummary(query: String?) -> String {
-        let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(atPath: HFHubCache.hubDirectory.path) else {
+        let modelIDs = HFHubCache.cachedModelIDs()
+        guard !modelIDs.isEmpty else {
             return "No models are installed."
         }
         var lines: [String] = []
-        for entry in entries.sorted() {
-            guard let modelID = HFHubCache.modelID(fromCacheEntry: entry) else { continue }
+        for modelID in modelIDs {
             if let query, !modelID.localizedStandardContains(query) { continue }
             let validation = ModelArtifactValidator.validate(modelID: modelID)
             lines.append(validation.isComplete

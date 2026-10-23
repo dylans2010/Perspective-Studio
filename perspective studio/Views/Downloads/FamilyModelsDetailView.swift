@@ -261,11 +261,7 @@ struct FamilyModelsDetailView: View {
     }
 
     private func deleteVariantModel(_ variant: ModelCatalogVariant) {
-        let fm = FileManager.default
-        let hubDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".cache/huggingface/hub")
-        let dirName = "models--" + variant.id.replacingOccurrences(of: "/", with: "--")
-        let targetURL = hubDir.appendingPathComponent(dirName)
-        try? fm.removeItem(at: targetURL)
+        try? FileManager.default.removeItem(at: HFHubCache.modelDirectory(for: variant.id))
         chatViewModel.scanInstalledModels()
     }
 }

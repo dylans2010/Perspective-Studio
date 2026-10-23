@@ -45,9 +45,13 @@ enum ModelDownloadError: LocalizedError {
 /// How it works:
 /// 1. Fetch the repo manifest from `GET /api/models/{id}/tree/main?recursive=true`
 ///    (the models API's `siblings` list has no sizes or etags — verified live).
-/// 2. Download **every** file into the standard hub cache layout
-///    (`blobs/<etag>`, `snapshots/<revision>/…` symlinks, `refs/main`) that
-///    MLX / swift-transformers reads, so a download is usable entirely offline.
+/// 2. Download **every** file as a real file into the exact directory the
+///    inference engine loads from — `~/Library/Caches/models/<org>/<name>/`
+///    (the layout of MLX Swift LM's `defaultHubApi` / swift-transformers
+///    `HubApi`) — and write the per-file
+///    `.cache/huggingface/download/<path>.metadata` record (commit hash +
+///    etag) that the engine's offline mode requires before it will use a
+///    cached file. A download done this way loads with zero network access.
 /// 3. Large files and redirects are handled by `URLSession` download tasks;
 ///    interrupted downloads persist `NSURLSession` resume data next to the blob
 ///    and are resumed (not restarted) on the next attempt, with up to 3 attempts
@@ -129,11 +133,9 @@ actor ModelDownloadService {
 
         let fm = FileManager.default
         let modelDir = HFHubCache.modelDirectory(for: modelID)
-        let blobsDir = modelDir.appendingPathComponent("blobs")
-        let snapshotDir = modelDir.appendingPathComponent("snapshots")
-            .appendingPathComponent(manifest.revision)
-        try fm.createDirectory(at: blobsDir, withIntermediateDirectories: true)
-        try fm.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
+        let metadataDir = HFHubCache.metadataDirectory(for: modelID)
+        try fm.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: metadataDir, withIntermediateDirectories: true)
 
         let totalBytes = max(manifest.totalBytes, 1)
         var completedBytes: Int64 = 0
@@ -141,20 +143,26 @@ actor ModelDownloadService {
         // Smallest first: config/tokenizer failures surface before gigabytes of weights.
         for file in manifest.files.sorted(by: { $0.size < $1.size }) {
             if cancelledModelIDs.contains(modelID) { throw CancellationError() }
-            let blobURL = blobsDir.appendingPathComponent(file.etag)
+            let destination = modelDir.appending(path: file.path)
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-            if await blobIsValid(blobURL, file: file) {
+            if await fileIsCurrent(destination, file: file) {
                 completedBytes += file.size
             } else {
-                try? fm.removeItem(at: blobURL)
-                // Immutable snapshot of the finished-bytes total, so the
-                // @Sendable progress closure captures only `let` values.
+                // Resume data and verified staging live in the metadata
+                // (hidden) directory: the engine's offline validation rejects
+                // any stray non-hidden file inside the model directory.
+                let resumeDataURL = metadataDir.appendingPathComponent(file.path + ".resume")
+                let stagingURL = metadataDir.appendingPathComponent(file.path + ".complete")
+                try fm.createDirectory(at: resumeDataURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                 let baseCompleted = completedBytes
                 let filePath = file.path
                 try await downloadFile(
                     file,
                     modelID: modelID,
-                    destination: blobURL
+                    destination: destination,
+                    resumeDataURL: resumeDataURL,
+                    stagingURL: stagingURL
                 ) { inFlight in
                     let done = min(baseCompleted + inFlight, totalBytes)
                     progress(ModelDownloadProgress(
@@ -168,7 +176,10 @@ actor ModelDownloadService {
                 completedBytes += file.size
             }
 
-            try linkIntoSnapshot(file: file, snapshotDir: snapshotDir, modelDir: modelDir)
+            // The engine reuses — and offline, requires — a .metadata record
+            // per file (commit hash + etag). Write/refresh it for every file,
+            // including files that were already on disk.
+            ensureMetadata(modelID: modelID, file: file, revision: manifest.revision)
             progress(ModelDownloadProgress(
                 modelID: modelID,
                 fractionCompleted: Double(min(completedBytes, totalBytes)) / Double(totalBytes),
@@ -177,11 +188,6 @@ actor ModelDownloadService {
                 currentFile: file.path
             ))
         }
-
-        // Record the revision the way HubApi expects.
-        let refsDir = modelDir.appendingPathComponent("refs")
-        try fm.createDirectory(at: refsDir, withIntermediateDirectories: true)
-        try manifest.revision.write(to: refsDir.appendingPathComponent("main"), atomically: true, encoding: .utf8)
 
         progress(ModelDownloadProgress(
             modelID: modelID, fractionCompleted: 1, downloadedBytes: totalBytes,
@@ -210,9 +216,10 @@ actor ModelDownloadService {
         _ file: HFRepoFile,
         modelID: String,
         destination: URL,
+        resumeDataURL: URL,
+        stagingURL: URL,
         inFlightProgress: @escaping @Sendable (Int64) -> Void
     ) async throws {
-        let resumeDataURL = destination.appendingPathExtension("resume")
         var lastError: Error?
 
         for attempt in 0..<3 {
@@ -224,8 +231,7 @@ actor ModelDownloadService {
                     resumeDataURL: resumeDataURL,
                     inFlightProgress: inFlightProgress
                 )
-                // Verify before the blob becomes visible under its final name.
-                let stagingURL = destination.appendingPathExtension("complete")
+                // Verify before the file becomes visible under its final name.
                 let fm = FileManager.default
                 try? fm.removeItem(at: stagingURL)
                 try fm.moveItem(at: tempURL, to: stagingURL)
@@ -369,30 +375,31 @@ actor ModelDownloadService {
         }
     }
 
-    /// A blob counts as already downloaded only at the exact expected size and,
+    /// A file counts as already downloaded only at the exact expected size and,
     /// for LFS files, with a matching SHA-256 — never merely because it exists.
-    /// Runs detached so hashing a multi-GB blob never blocks the service actor.
-    private func blobIsValid(_ blobURL: URL, file: HFRepoFile) async -> Bool {
+    /// Runs detached so hashing a multi-GB file never blocks the service actor.
+    private func fileIsCurrent(_ fileURL: URL, file: HFRepoFile) async -> Bool {
         await Task.detached(priority: .utility) {
             let fm = FileManager.default
-            guard fm.fileExists(atPath: blobURL.path),
-                  let size = try? blobURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+            guard fm.fileExists(atPath: fileURL.path),
+                  let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                   Int64(size) == file.size else { return false }
             guard let expectedHash = file.sha256 else { return true }
-            guard let actualHash = try? Self.sha256Hex(of: blobURL) else { return false }
+            guard let actualHash = try? Self.sha256Hex(of: fileURL) else { return false }
             return actualHash == expectedHash
         }.value
     }
 
-    private func linkIntoSnapshot(file: HFRepoFile, snapshotDir: URL, modelDir: URL) throws {
-        let fm = FileManager.default
-        let linkURL = snapshotDir.appendingPathComponent(file.path)
-        try fm.createDirectory(at: linkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? fm.removeItem(at: linkURL)
-        // Relative symlink: from the link's directory back up to the model dir, then into blobs/.
-        let depthBelowModelDir = linkURL.deletingLastPathComponent().pathComponents.count - modelDir.pathComponents.count
-        let ups = String(repeating: "../", count: max(depthBelowModelDir, 1))
-        try fm.createSymbolicLink(atPath: linkURL.path, withDestinationPath: "\(ups)blobs/\(file.etag)")
+    /// Writes (or refreshes) the Hub `.metadata` record for one file. The
+    /// engine's online path reuses a file when its recorded commit hash
+    /// matches; its offline path refuses files with no valid record at all.
+    private func ensureMetadata(modelID: String, file: HFRepoFile, revision: String) {
+        if let existing = HubDownloadMetadata.read(modelID: modelID, relativePath: file.path),
+           existing.etag == file.etag, existing.commitHash == revision {
+            return
+        }
+        try? HubDownloadMetadata.write(
+            modelID: modelID, relativePath: file.path, commitHash: revision, etag: file.etag)
     }
 
     nonisolated static func sha256Hex(of url: URL) throws -> String {

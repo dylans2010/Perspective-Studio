@@ -422,10 +422,10 @@ struct SettingsView: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("HuggingFace Hub Cache")
+                        Text("Downloaded Models (MLX Cache)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("~/.cache/huggingface/hub")
+                        Text("~/Library/Caches/models")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.tertiary)
                     }
@@ -766,27 +766,19 @@ struct SettingsView: View {
 
     private func scanLocalDownloads() async {
         isScanningLocal = true
-        let fm = FileManager.default
-        let hubDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".cache/huggingface/hub")
-        guard fm.fileExists(atPath: hubDir.path) else {
-            downloadedModels = []
-            isScanningLocal = false
-            return
-        }
-
         let list = await Task.detached(priority: .userInitiated) { () -> [LocalDiskModel] in
-            guard let contents = try? fm.contentsOfDirectory(at: hubDir, includingPropertiesForKeys: [.isDirectoryKey]) else {
-                return []
-            }
             var result: [LocalDiskModel] = []
-            for modelDir in contents where modelDir.lastPathComponent.hasPrefix("models--") {
-                let rawName = modelDir.lastPathComponent.replacingOccurrences(of: "models--", with: "")
-                let parts = rawName.split(separator: "--")
-                let author = parts.first.map(String.init) ?? "Local"
-                let modelName = parts.dropFirst().joined(separator: "-")
-                let modelId = "\(author)/\(modelName)"
-                let size = DownloadsView.calculateDirSize(at: modelDir, fm: fm)
-                result.append(LocalDiskModel(id: modelId, displayName: modelName, author: author, sizeBytes: size, url: modelDir))
+            for modelId in HFHubCache.cachedModelIDs() {
+                let parts = modelId.split(separator: "/", maxSplits: 1)
+                guard parts.count == 2 else { continue }
+                let author = String(parts[0])
+                let modelName = String(parts[1])
+                let modelDir = HFHubCache.modelDirectory(for: modelId)
+                let validation = ModelArtifactValidator.validate(modelID: modelId)
+                result.append(LocalDiskModel(
+                    id: modelId, displayName: modelName, author: author,
+                    sizeBytes: validation.totalBytes, url: modelDir,
+                    isComplete: validation.isComplete, issues: validation.issues))
             }
             return result.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         }.value
