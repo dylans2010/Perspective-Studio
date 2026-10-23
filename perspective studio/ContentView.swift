@@ -67,25 +67,28 @@ struct MainView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            VStack(spacing: 0) {
-                List(selection: $selectedTab) {
-                    ForEach(SidebarTab.allCases) { tab in
-                        Label(tab.title, systemImage: tab.symbol)
-                            .tag(tab)
+            ConversationListView(
+                selectedConversation: $chatViewModel.selectedConversation,
+                onOpenSettings: {
+                    selectedTab = .settings
+                },
+                onOpenDownloads: {
+                    selectedTab = .downloads
+                },
+                onToggleSidebar: {
+                    withAnimation {
+                        columnVisibility = (columnVisibility == .detailOnly) ? .all : .detailOnly
                     }
+                },
+                onNewChat: {
+                    selectedTab = .chat
+                    chatViewModel.createConversation(in: modelContext)
+                },
+                onDelete: {
+                    chatViewModel.deleteConversation($0, in: modelContext)
                 }
-                .listStyle(.sidebar)
-
-                if selectedTab == .chat {
-                    Divider()
-                    ConversationListView(
-                        selectedConversation: $chatViewModel.selectedConversation,
-                        onNewChat: { chatViewModel.createConversation(in: modelContext) },
-                        onDelete: { chatViewModel.deleteConversation($0, in: modelContext) }
-                    )
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
+            )
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
         } detail: {
             switch selectedTab {
             case .chat:
@@ -101,18 +104,14 @@ struct MainView: View {
                     }
                 )
             case .downloads:
-                DownloadsView(chatViewModel: chatViewModel)
+                DownloadsView(chatViewModel: chatViewModel, onClose: { selectedTab = .chat })
             case .settings:
-                SettingsView()
+                SettingsView(onClose: { selectedTab = .chat })
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .onChange(of: selectedTab) { _, newTab in
-            if newTab == .chat && chatViewModel.selectedConversation == nil {
-                chatViewModel.createConversation(in: modelContext)
-            }
-        }
         .onChange(of: chatViewModel.selectedConversation) {
+            selectedTab = .chat
             Task { await LLMService.shared.resetSession() }
         }
         .task {

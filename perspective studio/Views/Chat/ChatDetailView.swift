@@ -24,21 +24,18 @@ struct ChatDetailView: View {
     @AppStorage("chatGradientTopHex") private var customTopHex: String = GradientTheme.defaultTopHex
     @AppStorage("chatGradientBottomHex") private var customBottomHex: String = GradientTheme.defaultBottomHex
     @AppStorage("customSystemPrompt") private var globalSystemPrompt: String = ""
-    @AppStorage("enableThinkingMode") private var enableThinkingMode: Bool = false
+    @AppStorage("enableThinkingMode") private var enableThinkingMode: Bool = true
+    @AppStorage("thinkingBudget") private var thinkingBudget: String = "medium"
 
     @FocusState private var isInputFocused: Bool
 
     private let suggestions: [ChatPromptSuggestion] = [
-        ChatPromptSuggestion(action: "Tell me", detail: "something fascinating"),
-        ChatPromptSuggestion(action: "Boost", detail: "my productivity"),
-        ChatPromptSuggestion(action: "Prepare", detail: "for a first date"),
-        ChatPromptSuggestion(action: "Plan", detail: "a movie night"),
-        ChatPromptSuggestion(action: "Begin", detail: "meditating"),
         ChatPromptSuggestion(action: "Decide", detail: "what to cook for dinner"),
-        ChatPromptSuggestion(action: "Master", detail: "smartphone photography"),
-        ChatPromptSuggestion(action: "Practice", detail: "a new language"),
-        ChatPromptSuggestion(action: "Analyze", detail: "a complex problem"),
-        ChatPromptSuggestion(action: "Draft", detail: "a professional email")
+        ChatPromptSuggestion(action: "Prepare", detail: "for a job interview"),
+        ChatPromptSuggestion(action: "Identify", detail: "this landmark"),
+        ChatPromptSuggestion(action: "Begin", detail: "meditating"),
+        ChatPromptSuggestion(action: "Plan", detail: "a vacation itinerary"),
+        ChatPromptSuggestion(action: "Boost", detail: "my productivity")
     ]
 
     private var activeGradientColors: [Color] {
@@ -78,6 +75,9 @@ struct ChatDetailView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
+                // Top floating controls matching Image 2 (Center Model Selector, Trailing New Chat)
+                topControlBar
+
                 // Main content: either welcome hero + suggestion cards or active message stream
                 if isEmptyConversation {
                     emptyStateContent
@@ -97,45 +97,39 @@ struct ChatDetailView: View {
                     .padding(.bottom, 16)
             }
         }
-        .toolbar {
-            // Leading: Sidebar Toggle
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    onToggleSidebar?()
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .help("Toggle Sidebar")
-            }
-
-            // Principal / Center: Model Selector Pill adopting pure Liquid Glass
-            ToolbarItem(placement: .principal) {
-                modelSelectorPill
-            }
-
-            // Trailing: Settings & New Chat
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    onOpenSettings?()
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .help("Settings")
-
-                Button {
-                    createNewChat()
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                }
-                .help("New Chat (⌘N)")
-            }
-        }
         .onAppear {
             chatViewModel.scanInstalledModels()
             if (conversation.systemPrompt == nil || conversation.systemPrompt?.isEmpty == true) && !globalSystemPrompt.isEmpty {
                 conversation.systemPrompt = globalSystemPrompt
             }
         }
+    }
+
+    // MARK: - Top Control Bar (Exact Image 2)
+
+    private var topControlBar: some View {
+        HStack {
+            Spacer()
+
+            modelSelectorPill
+
+            Spacer()
+
+            Button {
+                createNewChat()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 36, height: 36)
+                    .liquidGlass(.circle)
+            }
+            .buttonStyle(.plain)
+            .help("New Chat (⌘N)")
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 4)
     }
 
     // MARK: - Model Selector Pill (Pure Liquid Glass)
@@ -309,37 +303,62 @@ struct ChatDetailView: View {
                 .buttonStyle(.plain)
                 .help("Attach Files or Media")
 
-                // Left Lightbulb Brainstorm / Modes Button in Liquid Glass
+                // Left Lightbulb: Controls Model Thinking / Reasoning Mode
                 Menu {
-                    Button("Brainstorm Ideas") {
-                        chatViewModel.messageText = "Brainstorm 5 innovative ideas for: "
-                        isInputFocused = true
-                    }
-                    Button("Explain Simply") {
-                        chatViewModel.messageText = "Explain like I'm 12: "
-                        isInputFocused = true
-                    }
-                    Button("Code Review & Refactor") {
-                        chatViewModel.messageText = "Review and refactor the following code:\n```\n\n```"
-                        isInputFocused = true
-                    }
-                    Button("Step-by-Step Reasoning") {
-                        chatViewModel.messageText = "Think step-by-step and solve: "
-                        isInputFocused = true
+                    Toggle("Enable Thinking Mode", isOn: $enableThinkingMode)
+
+                    Divider()
+
+                    Section("Reasoning Effort") {
+                        Button {
+                            thinkingBudget = "low"
+                            enableThinkingMode = true
+                        } label: {
+                            HStack {
+                                Text("Low (Quick Analysis)")
+                                if thinkingBudget == "low" && enableThinkingMode {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+
+                        Button {
+                            thinkingBudget = "medium"
+                            enableThinkingMode = true
+                        } label: {
+                            HStack {
+                                Text("Medium (Balanced)")
+                                if thinkingBudget == "medium" && enableThinkingMode {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+
+                        Button {
+                            thinkingBudget = "high"
+                            enableThinkingMode = true
+                        } label: {
+                            HStack {
+                                Text("High (Deep Reasoning)")
+                                if thinkingBudget == "high" && enableThinkingMode {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
                     }
                 } label: {
-                    Image(systemName: "lightbulb")
+                    Image(systemName: enableThinkingMode ? "lightbulb.fill" : "lightbulb")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(enableThinkingMode ? Color.yellow : Color.white.opacity(0.85))
                         .frame(width: 44, height: 44)
                         .liquidGlass(.circle)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Suggested Modes & Prompts")
+                .help(enableThinkingMode ? "Thinking Mode: Active (\(thinkingBudget.capitalized))" : "Thinking Mode: Off")
 
                 // Main Input Capsule in Pure Liquid Glass
-                HStack(spacing: 10) {
+                HStack(alignment: .center, spacing: 10) {
                     TextField("Ask anything", text: $chatViewModel.messageText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...5)
@@ -358,7 +377,7 @@ struct ChatDetailView: View {
                             Image(systemName: "stop.fill")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundStyle(.white)
-                                .frame(width: 30, height: 30)
+                                .frame(width: 32, height: 32)
                                 .background(Color.red.opacity(0.85))
                                 .clipShape(.circle)
                         }
@@ -370,9 +389,9 @@ struct ChatDetailView: View {
                         } label: {
                             Image(systemName: "arrow.up")
                                 .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(canSend ? .black : .white.opacity(0.4))
-                                .frame(width: 30, height: 30)
-                                .background(canSend ? Color.white : Color.white.opacity(0.2))
+                                .foregroundStyle(canSend ? .white : .white.opacity(0.35))
+                                .frame(width: 32, height: 32)
+                                .background(canSend ? Color.white.opacity(0.28) : Color.white.opacity(0.12))
                                 .clipShape(.circle)
                         }
                         .buttonStyle(.plain)
@@ -380,9 +399,9 @@ struct ChatDetailView: View {
                         .help("Send Message (Return)")
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .frame(minHeight: 46)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .frame(minHeight: 52)
                 .liquidGlass(.capsule)
             }
         }

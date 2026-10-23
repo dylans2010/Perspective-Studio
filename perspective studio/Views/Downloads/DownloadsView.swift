@@ -3,6 +3,7 @@ import AppKit
 
 struct DownloadsView: View {
     @Bindable var chatViewModel: ChatViewModel
+    var onClose: (() -> Void)? = nil
     @State private var downloadsManager = DownloadsManager.shared
     @State private var selectedTab: DownloadsViewTab = .browse
     @State private var downloadedModels: [LocalDiskModel] = []
@@ -30,12 +31,28 @@ struct DownloadsView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Top Tab Picker
-            Picker("View", selection: $selectedTab) {
-                ForEach(DownloadsViewTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
+            HStack(spacing: 12) {
+                if let onClose {
+                    Button {
+                        onClose()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Chat")
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
+
+                Picker("View", selection: $selectedTab) {
+                    ForEach(DownloadsViewTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
 

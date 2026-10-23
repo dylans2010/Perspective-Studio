@@ -105,30 +105,33 @@ struct ImportFromProvidersView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        // Extraction Prompt Box
-                        VStack(alignment: .trailing, spacing: 8) {
-                            ScrollView {
-                                Text(extractionPrompt)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(.primary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(12)
+                        // Extraction Prompt Copy Card (Prompt is hidden, copy button provided)
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Persona Extraction Prompt")
+                                    .font(.subheadline)
+                                    .bold()
+                                Text("Tailored for \(selectedProvider.rawValue) to extract your tone, identity, and personal instructions.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            .frame(height: 140)
-                            .liquidGlass(.rect(cornerRadius: 10), isClear: true)
+
+                            Spacer()
 
                             Button {
                                 copyPromptToClipboard()
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: copiedPrompt ? "checkmark" : "doc.on.doc")
-                                    Text(copiedPrompt ? "Copied to Clipboard!" : "Copy Extraction Prompt")
+                                    Text(copiedPrompt ? "Copied!" : "Copy Extraction Prompt")
                                 }
-                                .font(.subheadline)
+                                .font(.headline)
                                 .bold()
                             }
                             .buttonStyle(.borderedProminent)
                         }
+                        .padding(14)
+                        .liquidGlass(.rect(cornerRadius: 12), isClear: true)
                     }
                     .padding(16)
                     .liquidGlass(.rect(cornerRadius: 16))

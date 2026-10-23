@@ -171,10 +171,26 @@ final class ChatViewModel {
                     userMessage: lastUserContent
                 )
 
+                var effectiveSystemPrompt = conversation.systemPrompt ?? ""
+                let isThinkingEnabled = UserDefaults.standard.bool(forKey: "enableThinkingMode")
+                let thinkingBudget = UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium"
+                if isThinkingEnabled {
+                    let thinkingInstruction: String
+                    switch thinkingBudget {
+                    case "low":
+                        thinkingInstruction = "\n\n[Reasoning]: Think briefly step-by-step before answering."
+                    case "high":
+                        thinkingInstruction = "\n\n[Reasoning]: Perform thorough, deep, and rigorous step-by-step chain-of-thought analysis before concluding."
+                    default:
+                        thinkingInstruction = "\n\n[Reasoning]: Think step-by-step and reason clearly through the problem."
+                    }
+                    effectiveSystemPrompt += thinkingInstruction
+                }
+
                 let stream = try await LLMService.shared.generate(
                     messages: messages,
                     videoURLs: videoURLs,
-                    systemPrompt: conversation.systemPrompt,
+                    systemPrompt: effectiveSystemPrompt.isEmpty ? nil : effectiveSystemPrompt,
                     temperature: conversation.temperature
                 )
                 var buffer = ""

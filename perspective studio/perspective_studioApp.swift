@@ -7,9 +7,10 @@ struct LocallyApp: App {
     @State private var chatViewModel = ChatViewModel()
 
     var body: some Scene {
-        WindowGroup("Locally") {
+        WindowGroup {
             ContentView(selectedTab: $selectedTab, chatViewModel: chatViewModel)
         }
+        .windowStyle(.hiddenTitleBar)
         .modelContainer(for: [UserProfile.self, Conversation.self, Message.self])
         .commands {
             CommandGroup(replacing: .appSettings) {
