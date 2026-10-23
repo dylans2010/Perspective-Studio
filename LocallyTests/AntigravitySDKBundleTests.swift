@@ -107,6 +107,20 @@ final class AntigravitySDKBundleTests: XCTestCase {
         XCTAssertFalse(answer.contains("file_read"))
     }
 
+    /// The line the harness injects into every Agent system prompt: the
+    /// model must be told the loop is genuinely there (or genuinely not).
+    func testAgentModeContextLineReflectsStatus() {
+        writeFile("google/antigravity/agent.py", contents: "# agent loop\n")
+        writeManifest(files: [("google/antigravity/agent.py", "# agent loop\n")])
+        let usable = AntigravitySDKBundle.status(directory: tempDir)
+        let line = AntigravitySDKBundle.agentModeContextLine(status: usable)
+        XCTAssertTrue(line.contains("0.1.20"), line)
+        XCTAssertTrue(line.contains("integrity-verified"), line)
+
+        let missing = AntigravitySDKBundle.agentModeContextLine(status: .init(isBundled: false))
+        XCTAssertTrue(missing.contains("MISSING"), missing)
+    }
+
     func testLoopEngineObservationPromptHidesToolID() {
         let prompt = AntigravityLoopEngine.observationPrompt(toolID: "file_read", output: "contents")
         XCTAssertFalse(prompt.contains("file_read"))

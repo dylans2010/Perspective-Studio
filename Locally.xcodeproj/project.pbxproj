@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A6D500022F60000100000002 /* AntigravitySDK in Resources */ = {isa = PBXBuildFile; fileRef = A6D500012F60000100000001 /* AntigravitySDK */; };
 		9DA0BA1C2F5B801300DA2772 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1A200012F5A000100000003 /* MLXLLM */; };
 		9DA0BA1D2F5B801300DA2772 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = D1A200012F5A000100000004 /* MLXVLM */; };
 		9DA0BA1E2F5B801300DA2772 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = D1A200012F5A000100000005 /* MLXLMCommon */; };
@@ -30,6 +31,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A6D500012F60000100000001 /* AntigravitySDK */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "Locally/AntigravitySDK"; sourceTree = "<group>"; };
 		9DE341F62F59134300242AA7 /* Locally.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Locally.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9DE342072F59134400242AA7 /* LocallyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "LocallyTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9DE342112F59134400242AA7 /* LocallyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "LocallyUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -167,6 +169,7 @@
 			isa = PBXGroup;
 			children = (
 				9DE341F82F59134300242AA7 /* Locally */,
+				A6D500012F60000100000001 /* AntigravitySDK */,
 				9DE3420A2F59134400242AA7 /* LocallyTests */,
 				9DE342142F59134400242AA7 /* LocallyUITests */,
 				9DE341F72F59134300242AA7 /* Products */,
@@ -305,6 +308,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A6D500022F60000100000002 /* AntigravitySDK in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

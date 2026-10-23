@@ -39,6 +39,25 @@ The SDK is bundled **for its agent loop only**:
   `pydantic`, …) — dependencies of the SDK's model connections, which
   Locally does not run.
 
+## How it is bundled (Xcode wiring)
+
+The SDK ships through an explicit **folder reference**: the Xcode
+project carries a `folder`-type reference for `Locally/AntigravitySDK`
+in the Locally target's **Resources** build phase, so the build copies
+the whole directory — structure intact — to
+`Contents/Resources/AntigravitySDK/` in the app bundle, where
+`AntigravitySDKBundle.bundledDirectory()` finds and verifies it.
+
+The individual files are *also* listed as membership exceptions in the
+project's file-system synchronized group. That half matters just as
+much: without the exceptions, the synchronized group would try to copy
+each file as a loose resource — flattening the tree into the bundle
+root and colliding on the many `__init__.py` files (the duplicate-
+resource build failure this wiring replaced) — and without the folder
+reference, the exceptions alone would exclude the SDK from the app
+entirely. `scripts/verify-antigravity-bundle.py` checks both halves,
+the manifest integrity, and the loop-only policy.
+
 ## Using the vendored SDK directly
 
 The vendored sources are a standard Python package tree. With Python 3.10+

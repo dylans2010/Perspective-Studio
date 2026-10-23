@@ -68,6 +68,16 @@ public enum AntigravitySDKBundle {
 
     /// Finds the bundled SDK directory: the app bundle's resources first,
     /// then the source-tree locations a dev build runs from.
+    ///
+    /// The SDK reaches the bundle through an explicit *folder reference*
+    /// in the Xcode project (`AntigravitySDK` in the Locally target's
+    /// Resources phase), so a built app contains a real
+    /// `Contents/Resources/AntigravitySDK/` directory with the vendored
+    /// tree intact — directory structure preserved, which the per-file
+    /// synchronized-group copy could never provide (it flattens resources
+    /// and collides on the SDK's many `__init__.py` files; those files are
+    /// membership-excepted from the synchronized group for exactly that
+    /// reason, and this folder reference is what actually ships them).
     public nonisolated static func bundledDirectory(bundle: Bundle = .main) -> URL? {
         let fm = FileManager.default
         var candidates: [URL] = []
@@ -76,6 +86,12 @@ public enum AntigravitySDKBundle {
         }
         if let url = bundle.url(forResource: "AntigravitySDK", withExtension: nil) {
             candidates.append(url)
+        }
+        // Folder-reference copies are also addressable by subdirectory —
+        // resolve through the manifest itself so a layout change in the
+        // bundle can never silently orphan the SDK.
+        if let manifestURL = bundle.url(forResource: "sdk-manifest", withExtension: "json", subdirectory: "AntigravitySDK") {
+            candidates.append(manifestURL.deletingLastPathComponent())
         }
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
         candidates.append(cwd.appending(path: "Locally/AntigravitySDK"))
@@ -89,6 +105,20 @@ public enum AntigravitySDKBundle {
             }
         }
         return nil
+    }
+
+    /// One prompt-ready line describing the SDK's state for an Agent-mode
+    /// run. The harness injects this into every Agent system prompt so the
+    /// model knows the loop it is running inside of is present and usable —
+    /// or, if verification failed, that it must say so instead of assuming.
+    public nonisolated static func agentModeContextLine(status: Status) -> String {
+        if status.isUsable {
+            return "Agent engine: the bundled Antigravity SDK \(status.version ?? "") is present and integrity-verified (\(status.fileCount) files). Its agent loop is running this conversation — every tool call you make goes through it."
+        }
+        if status.isBundled {
+            return "Agent engine: the bundled Antigravity SDK is present but failed verification (\(status.issues.joined(separator: " "))). The native loop still runs this conversation; if the user asks about the agent engine, tell them it reported a problem instead of claiming it is healthy."
+        }
+        return "Agent engine: the Antigravity SDK bundle is MISSING from this build. The native loop still runs this conversation; if the user asks about the agent engine, tell them the SDK is not bundled in this build instead of claiming it is."
     }
 
     // MARK: - Status & verification
