@@ -67,6 +67,72 @@ final class ChatViewModel {
         activeSkills.contains(skill)
     }
 
+    // MARK: - Model choices (built-in Apple model + downloaded MLX models)
+
+    /// Models offered in the chat picker: the built-in Apple model first, then
+    /// everything the user has downloaded. The Apple model is only listed on
+    /// systems that have Foundation Models at all.
+    var modelChoices: [InstalledModel] {
+        var choices = installedModels
+        if AppleFoundationModel.availability != .unsupportedSystem {
+            choices.insert(AppleFoundationModel.descriptor, at: 0)
+        }
+        return choices
+    }
+
+    var appleModelAvailability: AppleModelAvailability {
+        AppleFoundationModel.availability
+    }
+
+    /// The backend that can actually serve the selected model.
+    var selectedBackend: any InferenceBackend {
+        InferenceBackends.backend(forModelID: selectedModelID)
+    }
+
+    /// Brings the loading state in line with a picker that writes
+    /// `selectedModelID` directly (Quick Chat, menu bar).
+    func prepareSelectedModel() {
+        guard let id = selectedModelID else {
+            selectedModelIsVisual = false
+            modelState = .idle
+            return
+        }
+        if AppleFoundationModel.isAppleModel(id) {
+            selectAppleModel()
+            return
+        }
+        guard let model = installedModels.first(where: { $0.id == id }) else { return }
+        loadInstalledModel(model)
+    }
+
+    func displayName(for modelID: String?) -> String? {
+        guard let modelID else { return nil }
+        if AppleFoundationModel.isAppleModel(modelID) {
+            return AppleFoundationModel.displayName
+        }
+        return installedModels.first(where: { $0.id == modelID })?.displayName
+            ?? modelID.replacingOccurrences(of: "mlx-community/", with: "")
+    }
+
+    /// Selects the built-in Apple Intelligence model without loading anything
+    /// from disk. Used both by the picker and as the no-models fallback.
+    func selectAppleModel() {
+        loadTask?.cancel()
+        selectedModelID = AppleFoundationModel.modelID
+        selectedModelIsVisual = false
+
+        let availability = AppleFoundationModel.availability
+        guard availability.isAvailable else {
+            modelState = .error(availability.explanation)
+            return
+        }
+
+        modelState = .ready(AppleFoundationModel.displayName)
+        Task {
+            _ = try? await InferenceBackends.apple.load(model: AppleFoundationModel.descriptor)
+        }
+    }
+
     func fetchModels() async {
         isLoadingModels = true
         do {
@@ -84,15 +150,27 @@ final class ChatViewModel {
         let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let conversation = selectedConversation else { return }
 
+        // Check if we have installed models; with none, `scanInstalledModels`
+        // selects the built-in Apple model as the default.
+        if installedModels.isEmpty {
+            scanInstalledModels()
+        }
+
         // If a model is not yet loaded into memory, auto-load the current or first installed model
         if case .ready = modelState {
             // Already ready, continue
-        } else {
-            // Check if we have installed models
-            if installedModels.isEmpty {
-                scanInstalledModels()
+        } else if AppleFoundationModel.isAppleModel(selectedModelID) {
+            let availability = AppleFoundationModel.availability
+            guard availability.isAvailable else {
+                let warning = Message(role: .system, content: availability.explanation)
+                warning.conversation = conversation
+                conversation.messages.append(warning)
+                try? context.save()
+                return
             }
-
+            // The system model is always resident: nothing to download or load.
+            modelState = .ready(AppleFoundationModel.displayName)
+        } else {
             let candidateModel: InstalledModel? = {
                 if let sel = selectedModelID, let match = installedModels.first(where: { $0.id == sel }) {
                     return match
@@ -101,10 +179,18 @@ final class ChatViewModel {
             }()
 
             guard let modelToLoad = candidateModel else {
-                let warning = Message(role: .system, content: "No downloaded models found on this Mac. Please open the Downloads tab or Settings → Models to download a model.")
-                warning.conversation = conversation
-                conversation.messages.append(warning)
-                try? context.save()
+                // Nothing downloaded: fall back to the built-in Apple model.
+                if AppleFoundationModel.isAvailable {
+                    selectAppleModel()
+                } else {
+                    let warning = Message(
+                        role: .system,
+                        content: "No downloaded models found on this Mac, and the built-in Apple model is unavailable: \(AppleFoundationModel.availability.explanation)"
+                    )
+                    warning.conversation = conversation
+                    conversation.messages.append(warning)
+                    try? context.save()
+                }
                 return
             }
 
@@ -264,7 +350,15 @@ final class ChatViewModel {
                 ) {
                     if let summaryPrompt = ContextSummarizationService.buildSummarizationPrompt(for: conversation) {
                         isSummarizing = true
-                        let rawSummary = try await LLMService.shared.summarize(prompt: summaryPrompt)
+                        // Summarize on whichever engine the conversation uses;
+                        // the Apple model has no MLX container to summarize with.
+                        let rawSummary: String
+                        if AppleFoundationModel.isAppleModel(selectedModelID) {
+                            rawSummary = try await InferenceBackends.apple
+                                .generate(prompt: summaryPrompt, systemPrompt: nil).text
+                        } else {
+                            rawSummary = try await LLMService.shared.summarize(prompt: summaryPrompt)
+                        }
                         let summary = ContextSummarizationService.cleanSummary(rawSummary)
                         conversation.runningSummary = summary
                         conversation.lastSummarizedMessageCount = conversation.messages.count - ContextSummarizationService.recentMessagesToKeep
@@ -320,26 +414,44 @@ final class ChatViewModel {
                     Self.attachmentsDirectory.appendingPathComponent($0)
                 }
 
-                let stream = try await LLMService.shared.generate(
-                    messages: messages,
-                    videoURLs: videoURLs,
-                    imageURLs: turnImageURLs,
-                    systemPrompt: effectiveSystemPrompt.isEmpty ? nil : effectiveSystemPrompt,
-                    temperature: conversation.temperature
-                )
                 var buffer = ""
                 var lastFlush = Date.now
-                for await token in stream {
-                    buffer += token
+
+                func flushPendingTokens(force: Bool) {
                     let now = Date.now
-                    if now.timeIntervalSince(lastFlush) >= 0.08 {
-                        assistantMessage.content += buffer
-                        buffer = ""
-                        lastFlush = now
-                    }
-                }
-                if !buffer.isEmpty {
+                    guard !buffer.isEmpty, force || now.timeIntervalSince(lastFlush) >= 0.08 else { return }
                     assistantMessage.content += buffer
+                    buffer = ""
+                    lastFlush = now
+                }
+
+                if AppleFoundationModel.isAppleModel(selectedModelID) {
+                    // A fresh session per turn, so the self-contained contextual
+                    // prompt carries the conversation history.
+                    let events = try InferenceBackends.apple.stream(
+                        prompt: Self.transcript(from: messages, skipping: conversation.systemPrompt),
+                        systemPrompt: effectiveSystemPrompt.isEmpty ? nil : effectiveSystemPrompt
+                    )
+                    for try await event in events {
+                        if Task.isCancelled { break }
+                        guard case .token(let token) = event else { continue }
+                        buffer += token
+                        flushPendingTokens(force: false)
+                    }
+                    flushPendingTokens(force: true)
+                } else {
+                    let stream = try await LLMService.shared.generate(
+                        messages: messages,
+                        videoURLs: videoURLs,
+                        imageURLs: turnImageURLs,
+                        systemPrompt: effectiveSystemPrompt.isEmpty ? nil : effectiveSystemPrompt,
+                        temperature: conversation.temperature
+                    )
+                    for await token in stream {
+                        buffer += token
+                        flushPendingTokens(force: false)
+                    }
+                    flushPendingTokens(force: true)
                 }
 
                 // Auto-read only if the setting is enabled
@@ -367,7 +479,8 @@ final class ChatViewModel {
         let outcome = await AntigravityAgentHarness.shared.run(
             prompt: userPrompt,
             modelID: selectedModelID,
-            maxTurns: 10
+            maxTurns: 10,
+            backend: selectedBackend
         ) { [weak self] event in
             guard let self else { return }
             switch event {
@@ -628,9 +741,47 @@ final class ChatViewModel {
         installedModels = found.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
+
+        // Default to the built-in Apple model when nothing is downloaded, and
+        // only when the user has not already chosen a model.
+        if selectedModelID == nil, installedModels.isEmpty, AppleFoundationModel.isAvailable {
+            selectAppleModel()
+        }
+    }
+
+    /// Renders the app's conversation turns as one self-contained prompt for
+    /// engines whose chat state does not persist between calls (the Apple model).
+    private static func transcript(
+        from messages: [(role: String, content: String)],
+        skipping skippedSystemPrompt: String?
+    ) -> String {
+        var lines: [String] = []
+        for message in messages {
+            switch message.role {
+            case "user":
+                lines.append("User: \(message.content)")
+            case "assistant":
+                lines.append("Assistant: \(message.content)")
+            case "system":
+                // The conversation's system prompt already travels as the
+                // session instructions; other system turns (the running
+                // summary) are real context and must stay.
+                if let skippedSystemPrompt, message.content == skippedSystemPrompt { continue }
+                lines.append("System: \(message.content)")
+            default:
+                lines.append("\(message.role.capitalized): \(message.content)")
+            }
+        }
+        lines.append("Assistant:")
+        return lines.joined(separator: "\n\n")
     }
 
     func loadInstalledModel(_ model: InstalledModel) {
+        if AppleFoundationModel.isAppleModel(model.id) {
+            selectAppleModel()
+            return
+        }
+
         let pipeline: String? = model.isVisual ? "image-text-to-text" : nil
         let tags: [String] = model.isVisual ? ["image-text-to-text"] : []
         let hfModel = HFModel(

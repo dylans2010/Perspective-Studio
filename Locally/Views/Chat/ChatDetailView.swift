@@ -61,13 +61,12 @@ struct ChatDetailView: View {
     }
 
     private var currentModelTitle: String {
-        if let id = chatViewModel.selectedModelID {
-            if let installed = chatViewModel.installedModels.first(where: { $0.id == id }) {
-                return installed.displayName
-            }
-            return id.replacingOccurrences(of: "mlx-community/", with: "")
-        }
-        return "Gemma 4 QAT E4B"
+        chatViewModel.displayName(for: chatViewModel.selectedModelID) ?? "Select Model"
+    }
+
+    /// The built-in Apple model, when this Mac can offer it at all.
+    private var appleModelChoice: InstalledModel? {
+        chatViewModel.modelChoices.first { AppleFoundationModel.isAppleModel($0.id) }
     }
 
     var body: some View {
@@ -292,8 +291,27 @@ struct ChatDetailView: View {
                 Text(currentModelTitle)
             }
 
+            if let appleModelChoice {
+                Section("Built-in") {
+                    Button {
+                        chatViewModel.loadInstalledModel(appleModelChoice)
+                    } label: {
+                        HStack {
+                            Text(appleModelChoice.displayName)
+                            if let status = chatViewModel.appleModelAvailability.shortStatus {
+                                Text(status)
+                            }
+                            if appleModelChoice.id == chatViewModel.selectedModelID {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    .disabled(!chatViewModel.appleModelAvailability.isAvailable)
+                }
+            }
+
             if !chatViewModel.installedModels.isEmpty {
-                Section("Installed Models") {
+                Section("Downloaded Models") {
                     ForEach(chatViewModel.installedModels) { model in
                         Button {
                             chatViewModel.loadInstalledModel(model)
@@ -309,7 +327,7 @@ struct ChatDetailView: View {
                 }
             } else {
                 Section {
-                    Text("No downloaded models. Visit Downloads tab to get models.")
+                    Text("No downloaded models yet. The built-in model runs without a download.")
                 }
             }
 

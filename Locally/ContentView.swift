@@ -140,7 +140,7 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .locallyQuickChat)) { _ in
             openWindow(id: "quick-chat")
         }
-        .onChange(of: chatViewModel.selectedConversation) {
+        .onChange(of: chatViewModel.selectedConversation?.id) {
             selectedTab = .chat
             Task { await LLMService.shared.resetSession() }
         }

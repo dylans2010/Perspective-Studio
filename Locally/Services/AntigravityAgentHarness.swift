@@ -177,6 +177,19 @@ public final class AntigravityAgentHarness {
 
         let selectedBackend = backend ?? InferenceBackends.default
 
+        // The built-in Apple model exposes native tool calling, so it runs
+        // through its own loop instead of the TOOL_CALL text protocol below.
+        if #available(macOS 26.0, *), selectedBackend.backendID == AppleFoundationModel.backendID {
+            return await FoundationModelAgentRunner.run(
+                prompt: prompt,
+                workspaceRoot: workspaceRoot,
+                maxTurns: maxTurns,
+                dispatchStatus: dispatchStatus,
+                addStep: addStep,
+                onEvent: onEvent
+            )
+        }
+
         // 1. Resolve and ensure local model is ready
         let targetModelID: String
         if let explicit = modelID, !explicit.isEmpty {

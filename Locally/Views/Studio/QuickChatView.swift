@@ -18,9 +18,14 @@ struct QuickChatView: View {
                 Image(systemName: "cpu")
                 Picker("Model", selection: $chatViewModel.selectedModelID) {
                     Text("No model").tag(nil as String?)
-                    ForEach(chatViewModel.installedModels) { model in
+                    ForEach(chatViewModel.modelChoices) { model in
                         Text(model.displayName).tag(model.id as String?)
                     }
+                }
+                .onChange(of: chatViewModel.selectedModelID) { _, _ in
+                    // Switching in Quick Chat must not leave a stale "ready"
+                    // state from the other model.
+                    chatViewModel.prepareSelectedModel()
                 }
                 .labelsHidden()
                 Spacer()
@@ -66,8 +71,8 @@ struct QuickChatView: View {
     }
 
     private var selectedModel: InstalledModel? {
-        chatViewModel.installedModels.first { $0.id == chatViewModel.selectedModelID }
-            ?? chatViewModel.installedModels.first
+        chatViewModel.modelChoices.first { $0.id == chatViewModel.selectedModelID }
+            ?? chatViewModel.modelChoices.first
     }
 
     private func run() {
@@ -76,10 +81,11 @@ struct QuickChatView: View {
         errorText = nil
         response = ""
         let text = prompt
+        let backend = chatViewModel.selectedBackend
         Task {
             do {
-                _ = try await InferenceBackends.default.load(model: model)
-                let stream = try InferenceBackends.default.stream(prompt: text, systemPrompt: nil)
+                _ = try await backend.load(model: model)
+                let stream = try backend.stream(prompt: text, systemPrompt: nil)
                 for try await event in stream {
                     if case .token(let token) = event {
                         response += token

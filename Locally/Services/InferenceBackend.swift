@@ -145,9 +145,25 @@ struct MLXInferenceBackend: InferenceBackend {
     }
 }
 
-/// The default backend used across the app.
+/// The backends used across the app.
 enum InferenceBackends {
+    /// MLX: Hugging Face models the user downloaded.
     static let `default`: any InferenceBackend = MLXInferenceBackend()
+
+    /// The built-in Apple Intelligence model. Always available as a choice;
+    /// it is the *default* choice when no MLX model is installed (see
+    /// `ChatViewModel.scanInstalledModels`).
+    static var apple: any InferenceBackend {
+        if #available(macOS 26.0, *) {
+            return FoundationModelsInferenceBackend()
+        }
+        return UnavailableAppleModelBackend()
+    }
+
+    /// Picks the backend that can actually serve `modelID`.
+    static func backend(forModelID modelID: String?) -> any InferenceBackend {
+        AppleFoundationModel.isAppleModel(modelID) ? apple : `default`
+    }
 }
 
 /// Real process memory readings (mach `phys_footprint`) — measured, not estimated.
