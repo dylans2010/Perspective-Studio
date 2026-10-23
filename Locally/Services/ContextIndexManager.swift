@@ -449,22 +449,28 @@ public enum ContextIndexManager {
     ) -> [Entry] {
         let ofKind = entries.filter { $0.kind == kind }
         guard kind == .tool else {
-            return ofKind
-                .map { (entry: $0, score: score(entry: $0, queryTokens: queryTokens)) }
-                .filter { $0.score > 0 }
-                .sorted { $0.score != $1.score ? $0.score > $1.score : $0.entry.order < $1.entry.order }
-                .map(\.entry)
+            let scoredEntries: [(entry: Entry, score: Int)] = ofKind.compactMap { entry in
+                let s = score(entry: entry, queryTokens: queryTokens)
+                return s > 0 ? (entry: entry, score: s) : nil
+            }
+            let sortedEntries = scoredEntries.sorted { lhs, rhs in
+                lhs.score != rhs.score ? lhs.score > rhs.score : lhs.entry.order < rhs.entry.order
+            }
+            return sortedEntries.map(\.entry)
         }
         func isCore(_ entry: Entry) -> Bool {
             entry.isCoreTool || (hasActiveProject && entry.id == "tool:\(projectMemoryToolID)")
         }
         let core = ofKind.filter(isCore).sorted { $0.order < $1.order }
-        let scored = ofKind
-            .filter { !isCore($0) }
-            .map { (entry: $0, score: score(entry: $0, queryTokens: queryTokens)) }
-            .filter { $0.score > 0 }
-            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.entry.order < $1.entry.order }
-            .map(\.entry)
+        let nonCore = ofKind.filter { !isCore($0) }
+        let scoredNonCore: [(entry: Entry, score: Int)] = nonCore.compactMap { entry in
+            let s = score(entry: entry, queryTokens: queryTokens)
+            return s > 0 ? (entry: entry, score: s) : nil
+        }
+        let sortedNonCore = scoredNonCore.sorted { lhs, rhs in
+            lhs.score != rhs.score ? lhs.score > rhs.score : lhs.entry.order < rhs.entry.order
+        }
+        let scored = sortedNonCore.map(\.entry)
         return core + scored
     }
 
@@ -624,13 +630,21 @@ public enum ContextIndexManager {
     /// first, zero-score excluded, at most `limit` (clamped to 1...8).
     public static func search(entries: [Entry], query: String, kind: Kind? = nil, limit: Int = 5) -> [Entry] {
         let queryTokens = tokenize(query)
-        let pool = kind.map { k in entries.filter { $0.kind == k } } ?? entries
-        return pool
-            .map { (entry: $0, score: score(entry: $0, queryTokens: queryTokens)) }
-            .filter { $0.score > 0 }
-            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.entry.order < $1.entry.order }
-            .prefix(max(1, min(limit, 8)))
-            .map(\.entry)
+        let pool: [Entry]
+        if let kind {
+            pool = entries.filter { $0.kind == kind }
+        } else {
+            pool = entries
+        }
+        let scoredEntries: [(entry: Entry, score: Int)] = pool.compactMap { entry in
+            let s = score(entry: entry, queryTokens: queryTokens)
+            return s > 0 ? (entry: entry, score: s) : nil
+        }
+        let sortedEntries = scoredEntries.sorted { lhs, rhs in
+            lhs.score != rhs.score ? lhs.score > rhs.score : lhs.entry.order < rhs.entry.order
+        }
+        let maxCount = max(1, min(limit, 8))
+        return Array(sortedEntries.prefix(maxCount).map(\.entry))
     }
 
     /// Renders search results with their FULL payloads (a tool match

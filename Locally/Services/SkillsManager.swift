@@ -1,16 +1,16 @@
 import Foundation
 import SwiftUI
 
-enum SkillSource: String, CaseIterable, Identifiable, Sendable {
+public enum SkillSource: String, CaseIterable, Identifiable, Sendable {
     case gemini = "Gemini / Antigravity"
     case claude = "Claude"
     case chatgpt = "ChatGPT"
     case xcode = "Xcode / Dev"
     case custom = "Custom"
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
-    var icon: String {
+    public var icon: String {
         switch self {
         case .gemini: "sparkles"
         case .claude: "brain.head.profile"
@@ -20,7 +20,7 @@ enum SkillSource: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var brandColor: Color {
+    public var brandColor: Color {
         switch self {
         case .gemini: .cyan
         case .claude: .orange
@@ -31,33 +31,53 @@ enum SkillSource: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-struct AgentSkill: Identifiable, Sendable, Hashable {
-    let id: String
-    let name: String
-    let description: String
-    let source: SkillSource
-    let folderURL: URL
-    let instructionPreview: String
-    let fullMarkdown: String
-    let tags: [String]
+public nonisolated struct AgentSkill: Identifiable, Sendable, Hashable {
+    public let id: String
+    public let name: String
+    public let description: String
+    public let source: SkillSource
+    public let folderURL: URL
+    public let instructionPreview: String
+    public let fullMarkdown: String
+    public let tags: [String]
 
-    static func == (lhs: AgentSkill, rhs: AgentSkill) -> Bool {
+    public nonisolated init(
+        id: String,
+        name: String,
+        description: String,
+        source: SkillSource,
+        folderURL: URL,
+        instructionPreview: String,
+        fullMarkdown: String,
+        tags: [String]
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.source = source
+        self.folderURL = folderURL
+        self.instructionPreview = instructionPreview
+        self.fullMarkdown = fullMarkdown
+        self.tags = tags
+    }
+
+    public static func == (lhs: AgentSkill, rhs: AgentSkill) -> Bool {
         lhs.id == rhs.id
     }
 
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }
 }
 
 @Observable
 @MainActor
-final class SkillsManager {
-    static let shared = SkillsManager()
+public final class SkillsManager {
+    public static let shared = SkillsManager()
 
-    private(set) var skills: [AgentSkill] = []
-    private(set) var isScanning: Bool = false
-    var searchQuery: String = ""
+    public private(set) var skills: [AgentSkill] = []
+    public private(set) var isScanning: Bool = false
+    public var searchQuery: String = ""
     var selectedSourceFilter: SkillSource? = nil
 
     var filteredSkills: [AgentSkill] {

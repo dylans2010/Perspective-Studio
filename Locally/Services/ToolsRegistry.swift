@@ -556,10 +556,8 @@ public final class ToolsRegistry {
     }
 
     /// Formats ONE tool's schema description — the per-tool payload the
-    /// context index stores and retrieves. Static and nonisolated (it
-    /// only reads the passed tool) so the pure index builder can render
-    /// payloads without touching the shared registry.
-    public nonisolated static func schemaDescription(for tool: any AssistTool) -> String {
+    /// context index stores and retrieves.
+    public static func schemaDescription(for tool: any AssistTool) -> String {
         var lines: [String] = []
         lines.append("- `\(tool.id)`: \(tool.name)")
         lines.append("  Description: \(tool.description)")
