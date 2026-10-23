@@ -252,7 +252,7 @@ struct AgentProjectsSettingsView: View {
                             Spacer()
                             Button {
                                 draftPinnedFiles.removeAll { $0 == relativePath }
-                            } label {
+                            } label: {
                                 Image(systemName: "xmark.circle")
                                     .font(.system(size: 11))
                             }

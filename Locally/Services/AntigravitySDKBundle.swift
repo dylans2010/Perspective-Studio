@@ -37,7 +37,7 @@ public enum AntigravitySDKBundle {
 
         /// The bundled SDK can serve as the loop layer: present, intact,
         /// and free of any model/tool runtime.
-        public var isUsable: Bool {
+        public nonisolated var isUsable: Bool {
             isBundled && integrityVerified && !containsExecutableRuntime
         }
 

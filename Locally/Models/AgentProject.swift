@@ -128,18 +128,18 @@ public struct AgentProject: Identifiable, Codable, Sendable, Equatable {
         requireToolUse = try container.decodeIfPresent(Bool.self, forKey: .requireToolUse) ?? true
     }
 
-    public var rootURL: URL { URL(fileURLWithPath: rootPath) }
+    public nonisolated var rootURL: URL { URL(fileURLWithPath: rootPath) }
 
     /// Whether the folder still exists — a project whose folder was moved
     /// or deleted stays listed (its memory is valuable) but cannot scope a
     /// run until the user re-points it in Settings.
-    public var folderExists: Bool {
+    public nonisolated var folderExists: Bool {
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: rootPath, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     /// Memory newest-first, the order the agent reads it in.
-    public var memoryNewestFirst: [AgentProjectMemoryEntry] {
+    public nonisolated var memoryNewestFirst: [AgentProjectMemoryEntry] {
         memory.sorted { $0.createdAt > $1.createdAt }
     }
 }

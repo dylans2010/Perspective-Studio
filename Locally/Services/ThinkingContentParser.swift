@@ -21,10 +21,10 @@ enum ThinkingContentParser {
         /// i.e. the model is still streaming its reasoning.
         var isThinkingOpen: Bool = false
 
-        var hasThinking: Bool { !thinkingBlocks.isEmpty }
+        nonisolated var hasThinking: Bool { !thinkingBlocks.isEmpty }
 
         /// All thinking blocks joined for display.
-        var thinkingText: String { thinkingBlocks.joined(separator: "\n\n") }
+        nonisolated var thinkingText: String { thinkingBlocks.joined(separator: "\n\n") }
     }
 
     nonisolated(unsafe) private static let tagPairs: [(open: String, close: String)] = [

@@ -18,8 +18,8 @@ import Foundation
 /// medium budget, until the user explicitly changes it.
 public enum ThinkingSettings {
 
-    public static let enabledKey = "enableThinkingMode"
-    public static let budgetKey = "thinkingBudget"
+    public nonisolated static let enabledKey = "enableThinkingMode"
+    public nonisolated static let budgetKey = "thinkingBudget"
 
     /// Effective Thinking Mode state: the stored value when the user has
     /// set one, otherwise the UI's declared default (`true`).
