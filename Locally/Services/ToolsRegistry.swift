@@ -507,6 +507,12 @@ public final class ToolsRegistry {
         register(tool: ExecutionPlanTool())
         register(tool: PlanAskUserTool())
         register(tool: ReportToUserTool())
+
+        // Computer Use (macOS desktop automation, built from scratch
+        // on ScreenCaptureKit / Accessibility / Vision / CGEvent /
+        // NSWorkspace — see Tools/Computer Use/ and the computer_use
+        // System Asset). Idempotent: registry keys by tool id.
+        ComputerUseToolRegistry.registerAll(into: self)
     }
 
     // MARK: - AssistTool Registration API

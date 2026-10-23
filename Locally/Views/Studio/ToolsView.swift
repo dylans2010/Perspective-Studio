@@ -34,6 +34,8 @@ struct ToolsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                ComputerUsePermissionsView()
+                Divider()
                 catalogSection
                 Divider()
                 directRunSection

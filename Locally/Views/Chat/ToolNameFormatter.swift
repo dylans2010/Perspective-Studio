@@ -252,7 +252,28 @@ public enum ToolNameFormatter {
     /// Returns an appropriate SF Symbol icon name for the given tool.
     public nonisolated static func iconName(for rawName: String) -> String {
         let normalized = rawName.lowercased().replacingOccurrences(of: "-", with: "_")
-        
+
+        if normalized.hasPrefix("computer_") {
+            if normalized.contains("screenshot") || normalized.contains("screen") {
+                return "camera.viewfinder"
+            }
+            if normalized.contains("mouse") {
+                return "computermouse.fill"
+            }
+            if normalized.contains("keyboard") {
+                return "keyboard.fill"
+            }
+            if normalized.contains("accessibility") || normalized.contains("ui_element") {
+                return "accessibility"
+            }
+            if normalized.contains("window") {
+                return "macwindow"
+            }
+            if normalized.contains("permission") {
+                return "lock.shield.fill"
+            }
+            return "desktopcomputer"
+        }
         if normalized.contains("calc") {
             return "plus.forwardslash.minus"
         }

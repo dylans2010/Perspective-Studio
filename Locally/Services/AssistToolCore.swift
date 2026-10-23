@@ -175,6 +175,7 @@ public enum ToolCapability: String, Codable, Sendable, CaseIterable {
     case systemExecution = "System & Shell Execution"
     case planning = "Task Planning"
     case memory = "Agent Memory"
+    case computerUse = "Computer Use"
     case general = "General"
 }
 
