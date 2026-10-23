@@ -7,9 +7,10 @@ import FoundationModels
 /// The MLX path teaches the model a `TOOL_CALL {...}` text convention and parses
 /// it back out. The system model has first-class tool support, so this runner
 /// hands `FoundationModels` real `Tool` values built from `ToolsRegistry` and
-/// lets the framework drive the call/observe/answer loop. The System Assets
-/// index still goes into the session instructions, and `system_asset_lookup`
-/// is one of the offered tools, so the same guidelines are available on demand.
+/// lets the framework drive the call/observe/answer loop. The session
+/// instructions carry only the context index's counts-only directory;
+/// full guidelines stay retrievable on demand through the offered lookup
+/// tools (`system_asset_lookup` and `context_index_search`).
 @available(macOS 26.0, *)
 @MainActor
 enum FoundationModelAgentRunner {
@@ -46,12 +47,18 @@ enum FoundationModelAgentRunner {
         "computer_verify_state"
     ]
 
-    /// The tools one run actually offers: the base set, plus the project
+    /// The tools one run actually offers: the base set, plus the context
+    /// index search unconditionally (the model must always be able to
+    /// retrieve index entries — schemas, assets, skills, memory — on
+    /// demand, since prompts no longer carry them), plus the project
     /// memory tool whenever a project is active (project runs must be
     /// able to read/write project memory), plus the Computer Use subset
     /// when Computer Use is enabled.
     static func runToolIDs(projectID: UUID?, computerUseEnabled: Bool) -> [String] {
         var ids = offeredToolIDs
+        if !ids.contains("context_index_search") {
+            ids.append("context_index_search")
+        }
         if projectID != nil && !ids.contains("project_memory") {
             ids.append("project_memory")
         }
@@ -273,7 +280,10 @@ enum FoundationModelAgentRunner {
     }
 
     private static func buildInstructions(toolNames: [String], additionalSystemPrompt: String? = nil) -> String {
-        let assetsIndex = SystemAssetsManager.shared.generatePromptIndex()
+        // Counts-only directory from the context index — never the full
+        // asset index or any catalog. Full entries are retrieved on
+        // demand through the offered lookup tools.
+        let directory = ContextIndexManager.directoryText(mode: .agent)
         let sdkLine = AntigravitySDKBundle.agentModeContextLine(status: AntigravitySDKBundle.status())
         let computerLine = ComputerUseSettings.isEnabled
             ? "Computer Use is ON and its desktop tools are among the tools offered to you: observe the screen first, act once, then verify."
@@ -294,7 +304,7 @@ enum FoundationModelAgentRunner {
         4. Never mention a tool's name or id in your answer. The app shows your tool activity in its own cards; in your text, describe actions and findings in plain language ("I read the file", "I searched the project").
         5. If a project is active (its context appears below), you MUST call tools for it: explore the project first, ground every claim in a result from this run, and record durable facts in the project's memory. A tool-less answer about a project is rejected by the runtime.
 
-        \(assetsIndex)
+        \(directory)
 
         ## Response style
         - Lead with the answer.
@@ -302,10 +312,11 @@ enum FoundationModelAgentRunner {
         - Keep it short enough to fit an on-device model's context.
         """
 
-        // Custom system prompts + skills + thinking format, assembled by
-        // ModelContextBuilder at the call site. The on-device context is
-        // small, so callers keep this compact — but it must be present at
-        // all, or the model (correctly, from its view) denies having them.
+        // Retrieved custom-prompt/skill/memory excerpts + thinking
+        // format, assembled by ModelContextBuilder at the call site from
+        // the context index. The on-device context is small, so the
+        // bundle is budgeted — but it must be present at all, or the
+        // model (correctly, from its view) denies having them.
         if let additionalSystemPrompt,
            !additionalSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             instructions += "\n\n" + additionalSystemPrompt

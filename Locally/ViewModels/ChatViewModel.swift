@@ -378,38 +378,41 @@ final class ChatViewModel {
                     userMessage: lastUserContent
                 )
 
-                // The effective system prompt is assembled in ONE place so
-                // the model actually learns what it has: the custom prompts
-                // (global + conversation), its tools, its system assets, and
-                // its skills — plus this turn's knowledge passages and the
-                // <thinking> format instruction. Previously this block only
-                // ever contained the conversation prompt + active skills,
-                // and on the MLX path even that was discarded downstream.
+                // The effective system prompt is assembled in ONE place
+                // from the context index: the counts-only directory plus
+                // the small bundle of excerpts the local retriever picked
+                // for this message (custom-prompt chunks, skill excerpts,
+                // asset summaries) — plus this turn's knowledge passages
+                // and the <thinking> format instruction. Nothing is
+                // injected in full any more: no tool list, no asset index,
+                // no skill markdown dump, no whole custom prompt. And Chat
+                // mode gets NO project context at all — the Memory system
+                // is Agent-mode only, so no project block is built here.
                 let knowledge = pendingKnowledgeContext
                 pendingKnowledgeContext = nil
+                let globalPrompt = UserDefaults.standard.string(forKey: "customSystemPrompt") ?? ""
+                let conversationPrompt = conversation.systemPrompt ?? ""
+                let activeSkillIDs = Set(activeSkills.map(\.id))
                 let effectiveSystemPrompt = ModelContextBuilder.build(
                     ModelContextBuilder.Input(
-                        globalCustomPrompt: UserDefaults.standard.string(forKey: "customSystemPrompt") ?? "",
-                        conversationSystemPrompt: conversation.systemPrompt ?? "",
                         isAgentMode: false,
-                        includeTools: true,
-                        compactToolsList: ModelContextBuilder.compactToolsList(from: ToolsRegistry.shared.allTools),
-                        includeSystemAssets: true,
-                        systemAssetsIndex: SystemAssetsManager.shared.generatePromptIndex(),
-                        availableSkills: SkillsManager.shared.skills,
-                        activeSkills: Array(activeSkills),
+                        indexDirectory: ContextIndexManager.directoryText(
+                            mode: .chat,
+                            globalCustomPrompt: globalPrompt,
+                            conversationCustomPrompt: conversationPrompt
+                        ),
+                        retrievedContext: ContextIndexManager.retrievedBundle(
+                            query: lastUserContent,
+                            mode: .chat,
+                            globalCustomPrompt: globalPrompt,
+                            conversationCustomPrompt: conversationPrompt,
+                            activeSkillIDs: activeSkillIDs
+                        ),
                         thinkingEnabled: ThinkingSettings.isEnabled,
                         thinkingBudget: ThinkingSettings.budget,
                         knowledgeContext: knowledge,
                         modelDisplayName: displayName(for: selectedModelID),
-                        // A selected project informs Chat mode too (folder,
-                        // snapshot, memory, pinned files) — without the
-                        // tool mandate, since Chat cannot call tools; the
-                        // tools section above tells the model to point the
-                        // user at Agent mode when the task needs them.
-                        projectContext: AgentProjectsStore.shared.activeProject.map {
-                            AgentProjectsStore.shared.contextBlock(for: $0, includeToolMandate: false)
-                        }
+                        projectContext: nil
                     )
                 )
 
@@ -499,20 +502,36 @@ final class ChatViewModel {
         let project = AgentProjectsStore.shared.activeProject
         let projectContext = project.map { AgentProjectsStore.shared.contextBlock(for: $0) }
 
-        // The harness adds the full tool schemas + system-asset index itself;
-        // what it never received before — and why Agent mode also claimed to
-        // have no custom prompt and no skills — is everything assembled
-        // here: custom prompts, skills (available + active), and the
-        // <thinking> format instruction.
+        // The harness adds the retrieved tool schemas + directory itself;
+        // what it never received before — and why Agent mode also claimed
+        // to have no custom prompt and no skills — is everything assembled
+        // here from the context index: the directory, the retrieved
+        // excerpts for this prompt (custom-prompt chunks, skill excerpts,
+        // asset summaries, project memory), and the <thinking> format
+        // instruction. Tool schemas are excluded from this bundle
+        // (includeToolSchemas: false) because the harness adds its own
+        // retrieved set — the model never pays for the same schema twice,
+        // and the Foundation-model runner gets its schemas natively.
+        let globalPrompt = UserDefaults.standard.string(forKey: "customSystemPrompt") ?? ""
+        let conversationPrompt = conversation.systemPrompt ?? ""
         let agentContextPrompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
-                globalCustomPrompt: UserDefaults.standard.string(forKey: "customSystemPrompt") ?? "",
-                conversationSystemPrompt: conversation.systemPrompt ?? "",
                 isAgentMode: true,
-                includeTools: false,
-                includeSystemAssets: false,
-                availableSkills: SkillsManager.shared.skills,
-                activeSkills: Array(activeSkills),
+                indexDirectory: ContextIndexManager.directoryText(
+                    mode: .agent,
+                    globalCustomPrompt: globalPrompt,
+                    conversationCustomPrompt: conversationPrompt,
+                    project: project
+                ),
+                retrievedContext: ContextIndexManager.retrievedBundle(
+                    query: userPrompt,
+                    mode: .agent,
+                    globalCustomPrompt: globalPrompt,
+                    conversationCustomPrompt: conversationPrompt,
+                    activeSkillIDs: Set(activeSkills.map(\.id)),
+                    project: project,
+                    includeToolSchemas: false
+                ),
                 thinkingEnabled: ThinkingSettings.isEnabled,
                 thinkingBudget: ThinkingSettings.budget,
                 modelDisplayName: displayName(for: selectedModelID),

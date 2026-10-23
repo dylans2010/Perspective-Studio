@@ -1,0 +1,712 @@
+import Foundation
+
+/// The Index Manager: the single place where everything the model *could*
+/// know about — tools, system assets, skills, custom system prompts, and
+/// (Agent mode only) project memory — is indexed locally so that a prompt
+/// only ever carries a small, budgeted selection of it.
+///
+/// Why this exists: prompts used to dump catalogs wholesale — every tool's
+/// full schema, every asset's index line, every skill's full markdown, the
+/// whole custom prompt, and up to 40 project-memory entries plus pinned
+/// file contents. A local model had to read all of that before it could
+/// start answering, which cost tokens and made every response slower.
+///
+/// The new flow:
+/// - `directoryText` — counts and category names ONLY (no tool ids, no
+///   per-item listing, ~160 estimated tokens at most). This is the only
+///   catalog-shaped text a prompt ever gets.
+/// - `retrievedBundle` — a small bundle of entries the *local* retriever
+///   scored against the user's current message, hard-capped per mode
+///   (600 estimated tokens in Chat, 1,600 in Agent) with per-kind
+///   sub-caps. Asset bodies are never pre-injected (summaries only);
+///   skill and custom-prompt payloads arrive as truncated excerpts.
+/// - `search` / the `context_index_search` tool — in Agent mode the model
+///   can pull full entries (e.g. one tool's complete schema) on demand,
+///   mid-run, instead of receiving all of them up front.
+///
+/// Project memory is Agent-mode only, by construction: `buildIndex`
+/// refuses to create memory entries for Chat mode no matter what the
+/// caller passes, and the bundle renderer drops them again defensively.
+///
+/// The scoring/selection/rendering core is pure and static, over value-type
+/// entries, exactly like `ModelContextBuilder`; the `@MainActor`
+/// convenience methods at the bottom gather the live values.
+public enum ContextIndexManager {
+
+    // MARK: - Types
+
+    public enum Kind: String, CaseIterable, Sendable {
+        case tool
+        case systemAsset
+        case skill
+        case customPrompt
+        case projectMemory
+
+        public var label: String {
+            switch self {
+            case .tool: "Tool"
+            case .systemAsset: "System asset"
+            case .skill: "Skill"
+            case .customPrompt: "Custom prompt"
+            case .projectMemory: "Project memory"
+            }
+        }
+    }
+
+    public enum Mode: Sendable, Equatable {
+        case chat
+        case agent
+
+        public var bundleTokenBudget: Int {
+            switch self {
+            case .chat: ContextIndexManager.chatBundleTokenBudget
+            case .agent: ContextIndexManager.agentBundleTokenBudget
+            }
+        }
+    }
+
+    /// One indexed item. `payload` is the full text (one tool's schema, one
+    /// asset's body, one skill's markdown, one custom-prompt chunk, one
+    /// memory entry) — it lives in the index, on this Mac, and only ever
+    /// reaches a prompt as a budgeted excerpt or an on-demand lookup.
+    public struct Entry: Sendable, Equatable, Identifiable {
+        public var id: String
+        public var kind: Kind
+        public var title: String
+        public var description: String
+        public var keywords: [String]
+        public var payload: String
+        /// Tool capability name (tools only) — feeds the directory's
+        /// category list. Never a tool id.
+        public var category: String?
+        /// Core tools are always present in the Agent tool bundle.
+        public var isCoreTool: Bool
+        /// Skills the user toggled on for this conversation.
+        public var isActiveSkill: Bool
+        /// Stable position in the index — the deterministic tie-breaker.
+        public var order: Int
+
+        public init(
+            id: String,
+            kind: Kind,
+            title: String,
+            description: String,
+            keywords: [String] = [],
+            payload: String,
+            category: String? = nil,
+            isCoreTool: Bool = false,
+            isActiveSkill: Bool = false,
+            order: Int = 0
+        ) {
+            self.id = id
+            self.kind = kind
+            self.title = title
+            self.description = description
+            self.keywords = keywords
+            self.payload = payload
+            self.category = category
+            self.isCoreTool = isCoreTool
+            self.isActiveSkill = isActiveSkill
+            self.order = order
+        }
+    }
+
+    // MARK: - Budgets (named constants, enforced in code)
+
+    /// Total estimated tokens a Chat-mode retrieved bundle may occupy.
+    public static let chatBundleTokenBudget = 600
+    /// Total estimated tokens an Agent-mode retrieved bundle may occupy.
+    public static let agentBundleTokenBudget = 1_600
+    /// Sub-cap: tool schemas inside an Agent bundle.
+    public static let toolSchemaTokenBudget = 900
+    /// Sub-cap: system-asset summaries (bodies are never pre-injected).
+    public static let systemAssetSummaryTokenBudget = 150
+    /// Sub-cap: skill excerpts.
+    public static let skillTokenBudget = 350
+    /// Sub-cap: custom-prompt chunks.
+    public static let customPromptTokenBudget = 300
+    /// Sub-cap: project-memory entries (Agent mode only).
+    public static let projectMemoryTokenBudget = 300
+    /// At most this many tool schemas in one Agent bundle.
+    public static let maxToolSchemasInBundle = 12
+    /// At most this many project-memory entries in one Agent bundle.
+    public static let maxProjectMemoryEntriesInBundle = 5
+    /// A skill's payload is truncated to this many characters per excerpt.
+    public static let skillPayloadCharacterLimit = 1_200
+    /// Total estimated tokens one `context_index_search` result may occupy.
+    public static let searchResultTokenBudget = 2_500
+    /// Tool ids that are always in the Agent tool bundle when present.
+    public static let coreToolIDs: Set<String> = ["context_index_search", "system_asset_lookup"]
+    /// The per-project memory tool joins the core set when a project is active.
+    public static let projectMemoryToolID = "project_memory"
+
+    // MARK: - Token estimation
+
+    /// The app's one token estimate: (characterCount + 3) / 4.
+    public static func estimatedTokens(for text: String) -> Int {
+        (text.count + 3) / 4
+    }
+
+    /// Truncates `text` to at most `maxTokens` estimated tokens, appending
+    /// `marker` (counted inside the budget) when anything was cut.
+    public static func truncate(_ text: String, toEstimatedTokens maxTokens: Int, marker: String) -> String {
+        guard estimatedTokens(for: text) > maxTokens else { return text }
+        let charBudget = max(0, maxTokens * 4 - marker.count)
+        return String(text.prefix(charBudget)) + marker
+    }
+
+    // MARK: - Tokenization & scoring
+
+    private static let stopwords: Set<String> = [
+        "the", "and", "for", "with", "that", "this", "from", "what", "when",
+        "where", "which", "have", "has", "had", "can", "could", "should",
+        "would", "will", "you", "your", "our", "are", "was", "were", "been",
+        "does", "did", "into", "about", "please", "help", "show", "tell",
+        "give", "make", "need", "want", "using", "use", "used", "how", "why",
+        "any", "all", "not", "but", "its", "it"
+    ]
+
+    /// Lowercased word tokens of length ≥ 3, stopwords removed, order kept,
+    /// duplicates removed. Used for queries and entry text alike.
+    public static func tokenize(_ text: String) -> [String] {
+        var seen = Set<String>()
+        var tokens: [String] = []
+        for raw in text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "_" }) {
+            let token = String(raw)
+            guard token.count >= 3, !stopwords.contains(token), !seen.contains(token) else { continue }
+            seen.insert(token)
+            tokens.append(token)
+        }
+        return tokens
+    }
+
+    /// Deterministic lexical score of one entry against tokenized query
+    /// terms: title matches weigh most, then keywords/tags, then the
+    /// description, then the payload. Custom-prompt chunks carry a large
+    /// priority boost (they are the user's standing instructions, so the
+    /// top chunks are retrieved within their sub-budget instead of being
+    /// dumped whole — or dropped), and user-activated skills get a boost
+    /// for the same reason. A score of zero means "not retrieved", boosts
+    /// included.
+    public static func score(entry: Entry, queryTokens: [String]) -> Int {
+        var total = 0
+        if entry.kind == .customPrompt { total += 500 }
+        if entry.kind == .skill && entry.isActiveSkill { total += 300 }
+        guard !queryTokens.isEmpty else { return total }
+
+        let titleTokens = Set(tokenize(entry.title))
+        let keywordTokens = Set(entry.keywords.flatMap { tokenize($0) })
+        let descriptionTokens = Set(tokenize(entry.description))
+        let payloadTokens = Set(tokenize(entry.payload))
+        var payloadHits = 0
+        for token in queryTokens {
+            if titleTokens.contains(token) { total += 10 }
+            if keywordTokens.contains(token) { total += 6 }
+            if descriptionTokens.contains(token) { total += 3 }
+            if payloadTokens.contains(token) { payloadHits += 1 }
+        }
+        // Payload evidence is weak and capped, so a long document cannot
+        // outrank a title/keyword match just by mentioning everything.
+        total += min(payloadHits, 5)
+        return total
+    }
+
+    // MARK: - Index building (pure)
+
+    /// Builds index entries from live-shaped values. Memory entries are
+    /// created ONLY in Agent mode: in Chat mode the `project` argument is
+    /// ignored entirely, so a Chat index containing memory is impossible
+    /// to construct through this API.
+    public static func buildIndex(
+        tools: [any AssistTool],
+        assets: [SystemAssetDescriptor],
+        assetContent: (String) -> String?,
+        skills: [AgentSkill],
+        activeSkillIDs: Set<String> = [],
+        globalCustomPrompt: String = "",
+        conversationCustomPrompt: String = "",
+        project: AgentProject? = nil,
+        mode: Mode
+    ) -> [Entry] {
+        var entries: [Entry] = []
+        var order = 0
+        func nextOrder() -> Int { defer { order += 1 }; return order }
+
+        for tool in tools {
+            entries.append(Entry(
+                id: "tool:\(tool.id)",
+                kind: .tool,
+                title: tool.name,
+                description: tool.description,
+                keywords: [tool.capability.rawValue],
+                payload: ToolsRegistry.schemaDescription(for: tool),
+                category: tool.capability.rawValue,
+                isCoreTool: coreToolIDs.contains(tool.id),
+                order: nextOrder()
+            ))
+        }
+
+        for asset in assets {
+            entries.append(Entry(
+                id: "systemAsset:\(asset.id)",
+                kind: .systemAsset,
+                title: asset.name,
+                description: asset.summary,
+                keywords: asset.tags + [asset.topic],
+                payload: assetContent(asset.id) ?? asset.summary,
+                order: nextOrder()
+            ))
+        }
+
+        for skill in skills {
+            entries.append(Entry(
+                id: "skill:\(skill.id)",
+                kind: .skill,
+                title: skill.name,
+                description: skill.description,
+                keywords: skill.tags,
+                payload: skill.fullMarkdown,
+                isActiveSkill: activeSkillIDs.contains(skill.id),
+                order: nextOrder()
+            ))
+        }
+
+        for entry in customPromptEntries(global: globalCustomPrompt, conversation: conversationCustomPrompt, startingOrder: order) {
+            entries.append(entry)
+            order += 1
+        }
+
+        // Agent mode ONLY — see the doc comment above. There is no code
+        // path from a Chat-mode call to a memory entry.
+        if mode == .agent, let project {
+            for memory in project.memoryNewestFirst {
+                entries.append(Entry(
+                    id: "projectMemory:\(memory.id.uuidString)",
+                    kind: .projectMemory,
+                    title: memory.kind.label,
+                    description: "",
+                    payload: memory.text,
+                    order: nextOrder()
+                ))
+            }
+        }
+
+        return entries
+    }
+
+    /// Chunks a custom prompt on paragraph and heading boundaries. Each
+    /// chunk becomes one entry whose title is its first line. An exact
+    /// duplicate conversation prompt (ChatDetailView copies the global
+    /// prompt into new conversations) is indexed once.
+    public static func customPromptEntries(global: String, conversation: String, startingOrder: Int = 0) -> [Entry] {
+        var entries: [Entry] = []
+        var order = startingOrder
+        let globalTrimmed = global.trimmingCharacters(in: .whitespacesAndNewlines)
+        let conversationTrimmed = conversation.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func addChunks(of text: String, sourceLabel: String) {
+            for chunk in chunkCustomPrompt(text) {
+                let firstLine = chunk.components(separatedBy: .newlines).first ?? ""
+                entries.append(Entry(
+                    id: "customPrompt:\(sourceLabel):\(order)",
+                    kind: .customPrompt,
+                    title: String(firstLine.prefix(80)),
+                    description: sourceLabel,
+                    payload: chunk,
+                    order: order
+                ))
+                order += 1
+            }
+        }
+
+        if !globalTrimmed.isEmpty { addChunks(of: globalTrimmed, sourceLabel: "Global") }
+        if !conversationTrimmed.isEmpty && conversationTrimmed != globalTrimmed {
+            addChunks(of: conversationTrimmed, sourceLabel: "Conversation")
+        }
+        return entries
+    }
+
+    /// Splits prompt text into chunks: a heading line or a blank line ends
+    /// the current chunk, and an over-long chunk is hard-split so no single
+    /// entry can blow a sub-budget on its own.
+    public static func chunkCustomPrompt(_ text: String) -> [String] {
+        var chunks: [String] = []
+        var current: [String] = []
+        func flush() {
+            let joined = current.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            current = []
+            guard !joined.isEmpty else { return }
+            if joined.count <= 2_000 {
+                chunks.append(joined)
+            } else {
+                var remaining = joined
+                while remaining.count > 2_000 {
+                    chunks.append(String(remaining.prefix(2_000)))
+                    remaining = String(remaining.dropFirst(2_000))
+                }
+                if !remaining.isEmpty { chunks.append(remaining) }
+            }
+        }
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                flush()
+            } else if trimmed.hasPrefix("#") && !current.isEmpty {
+                flush()
+                current.append(line)
+            } else {
+                current.append(line)
+            }
+        }
+        flush()
+        return chunks
+    }
+
+    // MARK: - Directory (pure)
+
+    /// The tiny directory a prompt may carry: counts and tool category
+    /// names ONLY — no tool ids, no per-item names, no summaries. Derived
+    /// from the entries, so what it counts is exactly what is indexed.
+    public static func directoryText(entries: [Entry], mode: Mode) -> String {
+        let toolEntries = entries.filter { $0.kind == .tool }
+        let assetCount = entries.filter { $0.kind == .systemAsset }.count
+        let skillCount = entries.filter { $0.kind == .skill }.count
+        let promptChunkCount = entries.filter { $0.kind == .customPrompt }.count
+
+        let presentCategories = Set(toolEntries.compactMap(\.category))
+        let categories = ToolCapability.allCases.map(\.rawValue).filter { presentCategories.contains($0) }
+
+        var lines: [String] = [
+            "[Context Directory]",
+            "Everything below is indexed locally on this Mac. Only these counts are ever in a prompt — full entries are never sent wholesale; a small selection is retrieved per message, and full text is retrievable on demand in Agent mode."
+        ]
+        if toolEntries.isEmpty {
+            lines.append("Tools: 0.")
+        } else if categories.isEmpty {
+            lines.append("Tools: \(toolEntries.count).")
+        } else {
+            lines.append("Tools: \(toolEntries.count) across \(categories.joined(separator: ", ")).")
+        }
+        lines.append("System assets: \(assetCount). Skills: \(skillCount). Custom prompt chunks: \(promptChunkCount).")
+        if mode == .agent {
+            let memoryCount = entries.filter { $0.kind == .projectMemory }.count
+            lines.append("Project memory entries: \(memoryCount) (Agent mode only).")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Retrieval & bundle rendering (pure)
+
+    private static func subBudget(for kind: Kind, mode: Mode) -> Int {
+        switch kind {
+        case .tool: toolSchemaTokenBudget
+        case .systemAsset: systemAssetSummaryTokenBudget
+        case .skill: skillTokenBudget
+        case .customPrompt: customPromptTokenBudget
+        case .projectMemory: projectMemoryTokenBudget
+        }
+    }
+
+    /// Allocation order: the user's standing instructions first (they must
+    /// never be crowded out), then tools, skills, asset summaries, memory.
+    private static let allocationOrder: [Kind] = [.customPrompt, .tool, .skill, .systemAsset, .projectMemory]
+
+    /// Scored candidates for one kind, best first, ties broken by index
+    /// order so selection is deterministic. Zero-score entries excluded.
+    /// Core tools lead the tool list regardless of score (Agent mode).
+    private static func candidates(
+        entries: [Entry],
+        kind: Kind,
+        queryTokens: [String],
+        hasActiveProject: Bool
+    ) -> [Entry] {
+        let ofKind = entries.filter { $0.kind == kind }
+        guard kind == .tool else {
+            return ofKind
+                .map { (entry: $0, score: score(entry: $0, queryTokens: queryTokens)) }
+                .filter { $0.score > 0 }
+                .sorted { $0.score != $1.score ? $0.score > $1.score : $0.entry.order < $1.entry.order }
+                .map(\.entry)
+        }
+        func isCore(_ entry: Entry) -> Bool {
+            entry.isCoreTool || (hasActiveProject && entry.id == "tool:\(projectMemoryToolID)")
+        }
+        let core = ofKind.filter(isCore).sorted { $0.order < $1.order }
+        let scored = ofKind
+            .filter { !isCore($0) }
+            .map { (entry: $0, score: score(entry: $0, queryTokens: queryTokens)) }
+            .filter { $0.score > 0 }
+            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.entry.order < $1.entry.order }
+            .map(\.entry)
+        return core + scored
+    }
+
+    /// Renders one entry as its bundle piece. Asset pieces are the summary
+    /// line ONLY — the body is never pre-injected. Skill payloads are
+    /// truncated to `payloadCharLimit` with a retrieval note.
+    private static func piece(for entry: Entry, payloadCharLimit: Int? = nil) -> String {
+        switch entry.kind {
+        case .tool:
+            return entry.payload
+        case .systemAsset:
+            return "- \(entry.title): \(entry.description)"
+        case .skill:
+            let limit = payloadCharLimit ?? skillPayloadCharacterLimit
+            if entry.payload.count > limit {
+                return "### Skill: \(entry.title)\n\(String(entry.payload.prefix(limit)))\n[Excerpt only — the full skill text is retrievable on demand in Agent mode.]"
+            }
+            return "### Skill: \(entry.title)\n\(entry.payload)"
+        case .customPrompt:
+            if let limit = payloadCharLimit, entry.payload.count > limit {
+                return "Custom instructions excerpt (\(entry.description)):\n\(String(entry.payload.prefix(limit)))\n[Excerpt only — further chunks are retrievable on demand in Agent mode.]"
+            }
+            return "Custom instructions excerpt (\(entry.description)):\n\(entry.payload)"
+        case .projectMemory:
+            if let limit = payloadCharLimit, entry.payload.count > limit {
+                return "- [\(entry.title)] \(String(entry.payload.prefix(limit)))…"
+            }
+            return "- [\(entry.title)] \(entry.payload)"
+        }
+    }
+
+    private static func sectionHeader(for kind: Kind) -> String {
+        switch kind {
+        case .tool: return "### Retrieved tool schemas (call with the TOOL_CALL format)"
+        case .systemAsset: return "### Retrieved system asset summaries (full text on demand in Agent mode)"
+        case .skill: return "### Retrieved skill excerpts"
+        case .customPrompt: return "### Retrieved custom instructions — set by the user, follow them"
+        case .projectMemory: return "### Retrieved project memory (Agent mode only)"
+        }
+    }
+
+    private static func defaultPayloadLimit(for kind: Kind) -> Int? {
+        kind == .skill ? skillPayloadCharacterLimit : nil
+    }
+
+    /// Selects and renders one kind's section within its sub-budget and
+    /// the remaining total budget, measuring the actual rendered text.
+    /// Returns nil when nothing fits / nothing was retrieved.
+    private static func renderSection(
+        kind: Kind,
+        candidates: [Entry],
+        mode: Mode,
+        remainingTotal: Int
+    ) -> String? {
+        let cap = min(subBudget(for: kind, mode: mode), remainingTotal)
+        guard cap > 0 else { return nil }
+        let header = sectionHeader(for: kind)
+        var pieces: [String] = []
+        var included = 0
+        for entry in candidates {
+            if kind == .tool && included >= maxToolSchemasInBundle { break }
+            if kind == .projectMemory && included >= maxProjectMemoryEntriesInBundle { break }
+            let candidate = piece(for: entry, payloadCharLimit: defaultPayloadLimit(for: kind))
+            let trial = ([header] + pieces + [candidate]).joined(separator: "\n")
+            if estimatedTokens(for: trial) <= cap {
+                pieces.append(candidate)
+                included += 1
+                continue
+            }
+            // Truncatable kinds: shrink this entry to fit rather than
+            // dropping the user's instructions / an active skill entirely.
+            if kind == .skill || kind == .customPrompt || kind == .projectMemory {
+                let overhead = piece(for: entry, payloadCharLimit: 0).count + header.count + pieces.joined(separator: "\n").count + 16
+                let availableChars = cap * 4 - overhead
+                if availableChars >= 200 {
+                    let shrunk = piece(for: entry, payloadCharLimit: availableChars)
+                    let shrunkTrial = ([header] + pieces + [shrunk]).joined(separator: "\n")
+                    if estimatedTokens(for: shrunkTrial) <= cap {
+                        pieces.append(shrunk)
+                        included += 1
+                        continue
+                    }
+                }
+            }
+            // Sequential kinds (custom-prompt chunks, memory entries) are
+            // parts of one ordered document: stop at the first entry that
+            // doesn't fit instead of skipping ahead and surfacing a later
+            // fragment out of context. Independent kinds (tools, skills,
+            // assets) keep scanning — a smaller later entry may still fit.
+            if kind == .customPrompt || kind == .projectMemory {
+                break
+            }
+        }
+        guard !pieces.isEmpty else { return nil }
+        return ([header] + pieces).joined(separator: "\n")
+    }
+
+    /// The retrieved bundle for one user message: the local retriever's
+    /// selection, grouped by kind, hard-capped at the mode's total budget.
+    /// Chat mode never contains tool schemas or project memory, whatever
+    /// the caller passes; Agent tool schemas are skipped when
+    /// `includeToolSchemas` is false (call sites whose harness adds its
+    /// own retrieved tool bundle, to avoid paying for schemas twice).
+    public static func retrievedBundle(
+        entries: [Entry],
+        query: String,
+        mode: Mode,
+        hasActiveProject: Bool = false,
+        includeToolSchemas: Bool = true
+    ) -> String {
+        let budget = mode.bundleTokenBudget
+        let queryTokens = tokenize(query)
+        let header = "[Retrieved Context — excerpts the local index selected for this message. This is a small selection, not the full catalog.]"
+        var used = estimatedTokens(for: header)
+        var sections: [String] = []
+
+        for kind in allocationOrder {
+            if kind == .tool && (mode == .chat || !includeToolSchemas) { continue }
+            if kind == .projectMemory && mode == .chat { continue }
+            let pool = entries.filter { mode == .agent || $0.kind != .projectMemory }
+            let section = renderSection(
+                kind: kind,
+                candidates: candidates(entries: pool, kind: kind, queryTokens: queryTokens, hasActiveProject: hasActiveProject),
+                mode: mode,
+                remainingTotal: budget - used
+            )
+            if let section {
+                sections.append(section)
+                used += estimatedTokens(for: section)
+            }
+        }
+        guard !sections.isEmpty else { return "" }
+        return ([header] + sections).joined(separator: "\n\n")
+    }
+
+    /// The Agent tool bundle on its own: core tools first, then the
+    /// top-scored schemas for the query, inside the tool sub-budget.
+    /// Used by the agent harness, which frames the schemas itself.
+    public static func toolSchemaBundle(entries: [Entry], query: String, hasActiveProject: Bool = false) -> String {
+        let queryTokens = tokenize(query)
+        let pool = candidates(entries: entries, kind: .tool, queryTokens: queryTokens, hasActiveProject: hasActiveProject)
+        var pieces: [String] = []
+        var included = 0
+        for entry in pool {
+            if included >= maxToolSchemasInBundle { break }
+            let trial = (pieces + [entry.payload]).joined(separator: "\n")
+            guard estimatedTokens(for: trial) <= toolSchemaTokenBudget else { continue }
+            pieces.append(entry.payload)
+            included += 1
+        }
+        return pieces.joined(separator: "\n")
+    }
+
+    // MARK: - On-demand search (pure)
+
+    /// Scores the index for the lookup tool: full entries back, best
+    /// first, zero-score excluded, at most `limit` (clamped to 1...8).
+    public static func search(entries: [Entry], query: String, kind: Kind? = nil, limit: Int = 5) -> [Entry] {
+        let queryTokens = tokenize(query)
+        let pool = kind.map { k in entries.filter { $0.kind == k } } ?? entries
+        return pool
+            .map { (entry: $0, score: score(entry: $0, queryTokens: queryTokens)) }
+            .filter { $0.score > 0 }
+            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.entry.order < $1.entry.order }
+            .prefix(max(1, min(limit, 8)))
+            .map(\.entry)
+    }
+
+    /// Renders search results with their FULL payloads (a tool match
+    /// returns that tool's complete schema, so the model can then call
+    /// it), capped at the search budget in total.
+    public static func renderSearchResults(_ results: [Entry]) -> String {
+        guard !results.isEmpty else { return "No indexed entries matched that query." }
+        var blocks: [String] = []
+        var used = 0
+        for entry in results {
+            let block = "### \(entry.kind.label): \(entry.title)\n\(entry.payload)"
+            let blockTokens = estimatedTokens(for: block)
+            if used + blockTokens <= searchResultTokenBudget {
+                blocks.append(block)
+                used += blockTokens
+            } else {
+                let remainingChars = (searchResultTokenBudget - used) * 4 - entry.title.count - 80
+                if remainingChars >= 200 {
+                    blocks.append("### \(entry.kind.label): \(entry.title)\n\(String(entry.payload.prefix(remainingChars)))\n[Truncated — this entry is larger than the per-lookup budget.]")
+                }
+                break
+            }
+        }
+        return blocks.joined(separator: "\n\n")
+    }
+}
+
+// MARK: - Live gathering (@MainActor convenience)
+
+extension ContextIndexManager {
+
+    /// Builds the index from the live registries/managers. In Chat mode
+    /// the active project is deliberately NOT consulted — memory entries
+    /// cannot enter a Chat index.
+    @MainActor
+    public static func liveEntries(
+        mode: Mode,
+        globalCustomPrompt: String = "",
+        conversationCustomPrompt: String = "",
+        activeSkillIDs: Set<String> = [],
+        project: AgentProject? = nil
+    ) -> [Entry] {
+        let effectiveProject = mode == .agent ? (project ?? AgentProjectsStore.shared.activeProject) : nil
+        // Asset payloads are fetched here, on the main actor, so the
+        // closure handed to the pure builder captures only a Sendable
+        // dictionary — never the (main-actor) assets manager itself.
+        let descriptors = SystemAssetsManager.shared.availableAssets()
+        var assetContents: [String: String] = [:]
+        for descriptor in descriptors {
+            if let content = SystemAssetsManager.shared.fetchAssetContent(named: descriptor.id) {
+                assetContents[descriptor.id] = content
+            }
+        }
+        return buildIndex(
+            tools: ToolsRegistry.shared.allTools,
+            assets: descriptors,
+            assetContent: { assetContents[$0] },
+            skills: SkillsManager.shared.skills,
+            activeSkillIDs: activeSkillIDs,
+            globalCustomPrompt: globalCustomPrompt,
+            conversationCustomPrompt: conversationCustomPrompt,
+            project: effectiveProject,
+            mode: mode
+        )
+    }
+
+    @MainActor
+    public static func directoryText(
+        mode: Mode,
+        globalCustomPrompt: String = "",
+        conversationCustomPrompt: String = "",
+        project: AgentProject? = nil
+    ) -> String {
+        directoryText(
+            entries: liveEntries(mode: mode, globalCustomPrompt: globalCustomPrompt, conversationCustomPrompt: conversationCustomPrompt, project: project),
+            mode: mode
+        )
+    }
+
+    @MainActor
+    public static func retrievedBundle(
+        query: String,
+        mode: Mode,
+        globalCustomPrompt: String = "",
+        conversationCustomPrompt: String = "",
+        activeSkillIDs: Set<String> = [],
+        project: AgentProject? = nil,
+        includeToolSchemas: Bool = true
+    ) -> String {
+        let entries = liveEntries(
+            mode: mode,
+            globalCustomPrompt: globalCustomPrompt,
+            conversationCustomPrompt: conversationCustomPrompt,
+            activeSkillIDs: activeSkillIDs,
+            project: project
+        )
+        let hasProject = mode == .agent && (project ?? AgentProjectsStore.shared.activeProject) != nil
+        return retrievedBundle(entries: entries, query: query, mode: mode, hasActiveProject: hasProject, includeToolSchemas: includeToolSchemas)
+    }
+
+    /// The Agent harness's tool bundle, gathered live for the run's prompt.
+    @MainActor
+    public static func agentToolSchemaBundle(query: String, hasActiveProject: Bool) -> String {
+        toolSchemaBundle(entries: liveEntries(mode: .agent), query: query, hasActiveProject: hasActiveProject)
+    }
+}

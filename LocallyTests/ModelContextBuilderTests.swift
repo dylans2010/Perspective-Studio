@@ -1,60 +1,64 @@
 import XCTest
 @testable import Locally
 
-/// The model can only recognize its tools, system assets, custom prompts,
-/// and skills if they are literally in the prompt this builder produces —
-/// these tests pin that contract for both modes.
+/// The builder assembles prompts from the context index only: a
+/// counts-only directory plus the retrieved, budgeted excerpts. These
+/// tests pin that contract for both modes — including that Chat mode can
+/// never receive project context/memory, and that an overfed retrieved
+/// bundle is truncated to the mode's cap.
 final class ModelContextBuilderTests: XCTestCase {
 
-    private func skill(name: String, markdown: String) -> AgentSkill {
-        AgentSkill(
-            id: "/tmp/\(name)",
-            name: name,
-            description: "Description of \(name)",
-            source: .custom,
-            folderURL: URL(fileURLWithPath: "/tmp/\(name)"),
-            instructionPreview: "Description of \(name)",
-            fullMarkdown: markdown,
-            tags: ["Workflow"]
-        )
-    }
+    private let directoryFixture = """
+    [Context Directory]
+    Tools: 5 across General, File Reading.
+    System assets: 2. Skills: 3. Custom prompt chunks: 1.
+    """
 
-    func testChatModePromptNamesToolsAssetsCustomPromptAndSkills() {
-        let active = skill(name: "Code Review", markdown: "REVIEW-INSTRUCTIONS-MARKER")
-        let other = skill(name: "Web Research", markdown: "not active")
+    func testChatModePromptCarriesDirectoryAndRetrievedExcerpts() {
         let prompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
-                globalCustomPrompt: "GLOBAL-CUSTOM-MARKER",
-                conversationSystemPrompt: "CONVERSATION-CUSTOM-MARKER",
                 isAgentMode: false,
-                compactToolsList: "- `calculator`: Calculator — Evaluate an arithmetic expression.",
-                systemAssetsIndex: "[System Assets Index]\n- coding_standards: Modern Swift guidelines",
-                availableSkills: [active, other],
-                activeSkills: [active],
+                indexDirectory: directoryFixture,
+                retrievedContext: """
+                [Retrieved Context]
+                ### Retrieved custom instructions — set by the user, follow them
+                Custom instructions excerpt (Global):
+                GLOBAL-CUSTOM-MARKER
+                ### Retrieved skill excerpts
+                ### Skill: Code Review
+                REVIEW-INSTRUCTIONS-MARKER
+                """,
                 thinkingEnabled: true,
                 thinkingBudget: "medium",
                 modelDisplayName: "Qwen Test"
             )
         )
 
+        XCTAssertTrue(prompt.contains("[Context Directory]"))
         XCTAssertTrue(prompt.contains("GLOBAL-CUSTOM-MARKER"))
-        XCTAssertTrue(prompt.contains("CONVERSATION-CUSTOM-MARKER"))
-        XCTAssertTrue(prompt.contains("calculator"))
-        XCTAssertTrue(prompt.contains("Chat mode"))
-        XCTAssertTrue(prompt.contains("coding_standards"))
-        // Available skills are named; the active one's full text is included.
-        XCTAssertTrue(prompt.contains("Web Research"))
         XCTAssertTrue(prompt.contains("REVIEW-INSTRUCTIONS-MARKER"))
+        // Chat mode: tools are not executed, and the prompt points the
+        // user at Agent mode instead of listing tools or skills.
+        XCTAssertTrue(prompt.contains("Chat mode"))
+        XCTAssertTrue(prompt.contains("switch to Agent mode"))
         // The thinking instruction must name the exact tags ThinkingModelUI parses.
         XCTAssertTrue(prompt.contains("<thinking>"))
         XCTAssertTrue(prompt.contains("</thinking>"))
     }
 
-    func testAgentModePromptCarriesFullToolSchemaAndCallFormat() {
+    func testAgentModePromptCarriesRetrievedToolSchema() {
         let prompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
                 isAgentMode: true,
-                fullToolsSchema: "Available Tools:\n- `calculator`: Calculator\n  Arguments:\n    * `expression` (string, required): The arithmetic expression."
+                indexDirectory: directoryFixture,
+                retrievedContext: """
+                [Retrieved Context]
+                ### Retrieved tool schemas (call with the TOOL_CALL format)
+                - `calculator`: Calculator
+                  Description: Evaluate an arithmetic expression.
+                  Arguments:
+                    * `expression` (string, required): The arithmetic expression.
+                """
             )
         )
 
@@ -63,30 +67,9 @@ final class ModelContextBuilderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("expression"))
     }
 
-    func testDuplicateGlobalAndConversationPromptAppearsOnce() {
-        let prompt = ModelContextBuilder.build(
-            ModelContextBuilder.Input(
-                globalCustomPrompt: "SAME-TEXT",
-                conversationSystemPrompt: "SAME-TEXT"
-            )
-        )
-        XCTAssertEqual(prompt.components(separatedBy: "SAME-TEXT").count - 1, 1)
-    }
-
     func testEmptyInputStillIdentifiesTheApp() {
         let prompt = ModelContextBuilder.build(ModelContextBuilder.Input())
         XCTAssertTrue(prompt.contains("Locally"))
-    }
-
-    func testCompactToolsListFormat() {
-        // Chat mode gets human capability names and descriptions — and NO
-        // raw tool ids, which are private protocol tokens the model must
-        // never learn to say (see ToolInvocationSanitizer).
-        let list = ModelContextBuilder.compactToolsList(from: [CalculatorAssistTool(), DateTimeAssistTool()])
-        XCTAssertTrue(list.contains("Calculator"))
-        XCTAssertTrue(list.contains("Date & Time"))
-        XCTAssertFalse(list.contains("calculator`"))
-        XCTAssertFalse(list.contains("`date_time`"))
     }
 
     func testEveryPromptCarriesTheToolSecrecyRule() {
@@ -96,7 +79,7 @@ final class ModelContextBuilderTests: XCTestCase {
         XCTAssertTrue(agent.contains("Never Reveal Tool Plumbing"))
     }
 
-    func testProjectContextIsIncludedWhenProvided() {
+    func testProjectContextIsIncludedInAgentModeWhenProvided() {
         let prompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
                 isAgentMode: true,
@@ -105,5 +88,36 @@ final class ModelContextBuilderTests: XCTestCase {
         )
         XCTAssertTrue(prompt.contains("[Active Project — Demo]"))
         XCTAssertTrue(prompt.contains("Project memory marker"))
+    }
+
+    func testProjectContextIsDroppedInChatModeEvenWhenProvided() {
+        // The Memory system is Agent-mode only: the builder refuses a
+        // project block in Chat mode even if a caller passes one.
+        let prompt = ModelContextBuilder.build(
+            ModelContextBuilder.Input(
+                isAgentMode: false,
+                projectContext: "[Active Project — Demo]\nSECRET-PROJECT-MEMORY-MARKER"
+            )
+        )
+        XCTAssertFalse(prompt.contains("SECRET-PROJECT-MEMORY-MARKER"))
+        XCTAssertFalse(prompt.contains("[Active Project — Demo]"))
+    }
+
+    func testRetrievedContextIsTruncatedToTheModeBudget() {
+        let oversized = String(repeating: "retrieved excerpt text that goes on and on. ", count: 400)
+
+        let chat = ModelContextBuilder.build(
+            ModelContextBuilder.Input(isAgentMode: false, retrievedContext: oversized)
+        )
+        XCTAssertTrue(chat.contains("truncated to this mode's token budget"))
+        // 10k+ characters went in; the prompt must stay near the 600-token
+        // Chat cap (2,400 chars) plus the fixed identity/secrecy sections.
+        XCTAssertLessThan(chat.count, 600 * 4 + 1_600)
+
+        let agent = ModelContextBuilder.build(
+            ModelContextBuilder.Input(isAgentMode: true, retrievedContext: oversized)
+        )
+        XCTAssertTrue(agent.contains("truncated to this mode's token budget"))
+        XCTAssertLessThan(agent.count, 1_600 * 4 + 1_600)
     }
 }

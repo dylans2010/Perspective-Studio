@@ -126,7 +126,11 @@ public struct AgentExecutionOutcome: Sendable {
 /// - The SDK contributes the loop ONLY: no SDK models and no SDK tools are
 ///   bundled or used. Models are the user's locally installed ones
 ///   (`InferenceBackend`); tools are Locally's own (`ToolsRegistry`).
-/// - Indexes guidelines from `SystemAssetsManager.shared.generatePromptIndex()`.
+/// - Context comes from `ContextIndexManager`: a counts-only directory
+///   plus the tool schemas the local retriever selected for the run's
+///   prompt (core tools first, inside a fixed sub-budget) — never the
+///   full schema dump or the full asset index. The model retrieves more
+///   from the index on demand during the run.
 /// - Orchestrates the multi-turn agent loop: Thought -> Tool Call -> Observation -> Synthesis.
 /// - Tool invocations are private plumbing: they are consumed by the loop
 ///   and shown to the user only as tool cards, never as message text.
@@ -280,6 +284,7 @@ public final class AntigravityAgentHarness {
         )
 
         let systemPrompt = buildSystemPrompt(
+            query: prompt,
             context: assistContext,
             sdkStatus: sdkStatus,
             projectName: activeProject?.name,
@@ -483,20 +488,29 @@ public final class AntigravityAgentHarness {
     // MARK: - Prompt Construction
 
     private func buildSystemPrompt(
+        query: String,
         context: AssistContext,
         sdkStatus: AntigravitySDKBundle.Status,
         projectName: String?,
         requireProjectTools: Bool,
         additionalSystemPrompt: String? = nil
     ) -> String {
-        let assetsIndex = SystemAssetsManager.shared.generatePromptIndex()
-        let toolsSchema = ToolsRegistry.shared.schemaDescriptions()
+        // Index-based context: the counts-only directory, plus the tool
+        // schemas the local retriever selected for this run's prompt
+        // (core tools first, inside the tool sub-budget). Everything else
+        // — the remaining tools' schemas, asset bodies, skills, memory —
+        // stays in the index and is retrieved on demand during the run.
+        let directory = ContextIndexManager.directoryText(mode: .agent)
+        let toolsSchema = ContextIndexManager.agentToolSchemaBundle(
+            query: query,
+            hasActiveProject: context.agentProjectID != nil
+        )
 
         // Computer Use state, stated plainly so the model uses the suite
         // when it is on and explains (instead of attempting) when it is
-        // off. The full computer_* schemas are already inside
-        // `toolsSchema` — this line is what connects them to the SDK loop
-        // the model is running in.
+        // off. Computer tools' schemas join `toolsSchema` whenever the
+        // retriever selects them for the task — this line is what
+        // connects them to the SDK loop the model is running in.
         let computerUseLine = ComputerUseSettings.isEnabled
             ? "Computer Use is ON: this Mac's screen and apps are available to you through the desktop tools in your tool list (screenshots, screen text, accessibility, mouse, keyboard, windows). Work observe → act → verify: look at the screen first, do one action, then verify the result before continuing."
             : "Computer Use is OFF (Settings → Computer Use). The desktop tools will decline to act; if a task needs the screen or another app, tell the user it needs Computer Use turned on instead of attempting it."
@@ -524,8 +538,10 @@ public final class AntigravityAgentHarness {
         - NEVER paste, quote, or summarize an invocation payload, and never preface a tool call with an announcement of its id.
         - If a tool fails, describe what you were trying to do and what went wrong in plain language — never the tool's id or raw error payload.
 
-        \(assetsIndex)
+        \(directory)
 
+        ## Your Tools — the schemas retrieved for this task:
+        The schemas below were selected from the index for this run's objective. If the task needs a capability whose schema is not here, retrieve it from the index on demand (the context index search is always in your tool set) instead of inventing an id or an argument key.
         \(toolsSchema)
 
         ## Response Style:
@@ -539,10 +555,12 @@ public final class AntigravityAgentHarness {
             prompt += "\n\n" + AgentToolPolicy.projectMandate(projectName: projectName)
         }
 
-        // The caller's context — custom system prompts, skills, and the
-        // <thinking> format instruction assembled by ModelContextBuilder.
-        // This is the part Agent mode never received before this parameter
-        // existed, so the agent denied having any of it.
+        // The caller's context — the index directory, the retrieved
+        // excerpts (custom-prompt chunks, skill excerpts, asset
+        // summaries, project memory), and the <thinking> format
+        // instruction assembled by ModelContextBuilder. Tool schemas are
+        // excluded there because this prompt adds its own retrieved set
+        // above — the model never pays for the same schema twice.
         if let additionalSystemPrompt,
            !additionalSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             prompt += "\n\n" + additionalSystemPrompt

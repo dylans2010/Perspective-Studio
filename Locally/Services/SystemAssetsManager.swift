@@ -26,8 +26,14 @@ public final class SystemAssetsManager {
         assets
     }
 
-    /// Generates a compact indexed manifest of all available system assets suitable
-    /// for inclusion in an agent's system prompt (approx. 100-200 tokens).
+    /// Generates a compact indexed manifest of all available system assets.
+    ///
+    /// NOTE: prompts no longer use this. Even this compact per-asset
+    /// listing cost tokens on every request, so `ContextIndexManager`
+    /// replaced it in prompts with a counts-only directory plus retrieved
+    /// summaries — asset bodies move only through the index (retrieved
+    /// excerpts and the asset/context lookup tools). This method is kept
+    /// for tests and any UI that wants the manifest.
     public func generatePromptIndex() -> String {
         guard !assets.isEmpty else {
             return "[System Assets Index]\nNo system guideline assets currently indexed."

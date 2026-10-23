@@ -468,6 +468,17 @@ public final class ToolsRegistry {
         register(tool: ModelLibraryAssistTool())
         register(tool: SystemAssetLookupAssistTool())
 
+        // Context index lookup: how the model retrieves full index
+        // entries (tool schemas, assets, skills, prompts, project
+        // memory) on demand instead of receiving them all up front.
+        // Registered here — in ToolsRegistry, the canonical execution
+        // registry the MLX harness loop and the Foundation-model runner
+        // both execute through — and mirrored into the legacy
+        // AssistToolRegistry so the capability-lookup tool can see it too.
+        let contextIndexSearch = ContextIndexSearchTool()
+        register(tool: contextIndexSearch)
+        AssistToolRegistry.shared.register(contextIndexSearch)
+
         // File and workspace operations
         register(tool: AssistReadFileTool())
         register(tool: AssistWriteFileTool())
@@ -544,26 +555,38 @@ public final class ToolsRegistry {
         Set(registeredTools.keys)
     }
 
-    /// Formats human and model-readable schema descriptions of all registered tools.
-    public func schemaDescriptions() -> String {
-        var lines: [String] = ["Available Tools:"]
-        for tool in allTools {
-            lines.append("\n- `\(tool.id)`: \(tool.name)")
-            lines.append("  Description: \(tool.description)")
-            lines.append("  Capability: \(tool.capability.rawValue) | Risk Level: \(tool.riskLevel.rawValue)")
-            if let properties = tool.parametersSchema.properties, !properties.isEmpty {
-                lines.append("  Arguments:")
-                let requiredKeys = Set(tool.parametersSchema.required ?? [])
-                for (key, schema) in properties.sorted(by: { $0.key < $1.key }) {
-                    let isRequired = requiredKeys.contains(key) ? "required" : "optional"
-                    let desc = schema.description ?? schema.type
-                    lines.append("    * `\(key)` (\(schema.type), \(isRequired)): \(desc)")
-                }
-            } else {
-                lines.append("  Arguments: None (empty object `{}`)")
+    /// Formats ONE tool's schema description — the per-tool payload the
+    /// context index stores and retrieves. Static and nonisolated (it
+    /// only reads the passed tool) so the pure index builder can render
+    /// payloads without touching the shared registry.
+    public nonisolated static func schemaDescription(for tool: any AssistTool) -> String {
+        var lines: [String] = []
+        lines.append("- `\(tool.id)`: \(tool.name)")
+        lines.append("  Description: \(tool.description)")
+        lines.append("  Capability: \(tool.capability.rawValue) | Risk Level: \(tool.riskLevel.rawValue)")
+        if let properties = tool.parametersSchema.properties, !properties.isEmpty {
+            lines.append("  Arguments:")
+            let requiredKeys = Set(tool.parametersSchema.required ?? [])
+            for (key, schema) in properties.sorted(by: { $0.key < $1.key }) {
+                let isRequired = requiredKeys.contains(key) ? "required" : "optional"
+                let desc = schema.description ?? schema.type
+                lines.append("    * `\(key)` (\(schema.type), \(isRequired)): \(desc)")
             }
+        } else {
+            lines.append("  Arguments: None (empty object `{}`)")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Formats human and model-readable schema descriptions of all registered tools.
+    ///
+    /// NOTE: prompts no longer call this — sending every schema at once is
+    /// exactly what `ContextIndexManager` replaced. The full dump remains
+    /// for debugging/UI use; prompts get the index's budgeted selection of
+    /// `schemaDescription(for:)` payloads instead.
+    public func schemaDescriptions() -> String {
+        let blocks = allTools.map { "\n" + Self.schemaDescription(for: $0) }
+        return (["Available Tools:"] + blocks).joined(separator: "\n")
     }
 
     /// Executes a registered tool by ID with arguments and context.

@@ -98,24 +98,28 @@ struct QuickChatView: View {
         let text = prompt
         let backend = chatViewModel.selectedBackend
         // Quick Chat used to pass `systemPrompt: nil`, so its model knew
-        // nothing about its tools, system assets, custom prompt, or skills.
-        // It now gets the same awareness prompt as the main chat.
+        // nothing about its indexed capabilities. It now gets the same
+        // index-based prompt as the main chat: the counts-only directory
+        // plus the excerpts retrieved for this prompt. Like all Chat
+        // surfaces it receives NO project context — memory is Agent-only.
+        let globalPrompt = UserDefaults.standard.string(forKey: "customSystemPrompt") ?? ""
         let systemPrompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
-                globalCustomPrompt: UserDefaults.standard.string(forKey: "customSystemPrompt") ?? "",
                 isAgentMode: false,
-                includeTools: true,
-                compactToolsList: ModelContextBuilder.compactToolsList(from: ToolsRegistry.shared.allTools),
-                includeSystemAssets: true,
-                systemAssetsIndex: SystemAssetsManager.shared.generatePromptIndex(),
-                availableSkills: SkillsManager.shared.skills,
-                activeSkills: Array(chatViewModel.activeSkills),
+                indexDirectory: ContextIndexManager.directoryText(
+                    mode: .chat,
+                    globalCustomPrompt: globalPrompt
+                ),
+                retrievedContext: ContextIndexManager.retrievedBundle(
+                    query: text,
+                    mode: .chat,
+                    globalCustomPrompt: globalPrompt,
+                    activeSkillIDs: Set(chatViewModel.activeSkills.map(\.id))
+                ),
                 thinkingEnabled: ThinkingSettings.isEnabled,
                 thinkingBudget: ThinkingSettings.budget,
                 modelDisplayName: model.displayName,
-                projectContext: AgentProjectsStore.shared.activeProject.map {
-                    AgentProjectsStore.shared.contextBlock(for: $0, includeToolMandate: false)
-                }
+                projectContext: nil
             )
         )
         Task {

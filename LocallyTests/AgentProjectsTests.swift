@@ -43,6 +43,18 @@ final class AgentProjectsTests: XCTestCase {
     }
 
     @MainActor
+    func testContextBlockWithoutMemoryOmitsTheMemorySectionEntirely() {
+        let block = AgentProjectsStore.shared.contextBlock(for: sampleProject(), includeMemory: false)
+        // No entries, and no memory-rules lines either.
+        XCTAssertFalse(block.contains("Newer decision"))
+        XCTAssertFalse(block.contains("Older fact"))
+        XCTAssertFalse(block.contains("Project memory"))
+        // The non-memory project context is still there.
+        XCTAssertTrue(block.contains("[Active Project — Demo]"))
+        XCTAssertTrue(block.contains("Always run the tests."))
+    }
+
+    @MainActor
     func testContextBlockForEmptyMemoryInvitesRecording() {
         var project = sampleProject()
         project.memory = []

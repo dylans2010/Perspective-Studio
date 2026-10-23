@@ -135,13 +135,21 @@ public final class AgentProjectsStore {
 
     // MARK: - Agent context
 
-    /// The prompt block for one agent run in a project: identity, folder,
-    /// the user's notes and standing instructions, and the project's
-    /// memory — plus the rules for using that memory. This is what makes
-    /// the agent *remember this project in particular*: memory is injected
-    /// on every run, and durable new facts are written back through the
-    /// project memory tool and the post-run session note.
-    public func contextBlock(for project: AgentProject, memoryLimit: Int = 40, includeToolMandate: Bool = true) -> String {
+    /// The prompt block for one Agent-mode run in a project: identity,
+    /// folder, the user's notes and standing instructions, and — unless
+    /// `includeMemory` is false — the project's memory, plus the rules
+    /// for using that memory. This is what makes the agent *remember this
+    /// project in particular*: memory goes into Agent runs, and durable
+    /// new facts are written back through the project memory tool and the
+    /// post-run session note.
+    ///
+    /// The Memory system is Agent-mode ONLY. Chat mode never calls this
+    /// method at all (its context comes from the context index, which
+    /// contains no memory entries in Chat mode); `includeMemory: false`
+    /// exists for any future non-Agent caller that needs the project's
+    /// non-memory context, and omits the memory section AND its rules
+    /// entirely.
+    public func contextBlock(for project: AgentProject, memoryLimit: Int = 40, includeToolMandate: Bool = true, includeMemory: Bool = true) -> String {
         var lines: [String] = [
             "[Active Project — \(project.name)]",
             "Project folder (your workspace root for this run — resolve every relative path against it, and stay inside it unless the user says otherwise): \(project.rootPath)"
@@ -193,24 +201,24 @@ public final class AgentProjectsStore {
 
         // The Project Tool Mandate, in the context block as well as the
         // harness prompt, so every Agent path (MLX loop, Apple-model
-        // runner) carries it. Chat mode passes `includeToolMandate:
-        // false` — it receives the project's context (folder, snapshot,
-        // memory, pinned files) but cannot call tools, so the mandate
-        // there would order the impossible; its tools section already
-        // tells the model to point the user at Agent mode for tool work.
+        // runner) carries it. This block is built for Agent runs only —
+        // Chat mode never receives project context (see the doc comment
+        // above) — so the mandate here never orders the impossible.
         if project.requireToolUse && includeToolMandate {
             lines.append("TOOL MANDATE for this project: you must ALWAYS use/call tools when working in this project — no exceptions. Your first action must be a tool call that explores the project, and every claim about the project must be grounded in a tool result from this run. The runtime rejects a final answer given before any tool has run.")
         }
 
-        let memory = project.memoryNewestFirst.prefix(memoryLimit)
-        if memory.isEmpty {
-            lines.append("Project memory: empty so far. When you learn a durable fact about this project (a decision, a convention, a gotcha, where things live), record it with the project memory tool so future sessions start from it.")
-        } else {
-            lines.append("Project memory — what you have remembered about THIS project from earlier sessions. Treat facts and instructions as established unless the current code or the user contradicts them:")
-            for entry in memory {
-                lines.append("- [\(entry.kind.label)] \(entry.text)")
+        if includeMemory {
+            let memory = project.memoryNewestFirst.prefix(memoryLimit)
+            if memory.isEmpty {
+                lines.append("Project memory: empty so far. When you learn a durable fact about this project (a decision, a convention, a gotcha, where things live), record it with the project memory tool so future sessions start from it.")
+            } else {
+                lines.append("Project memory — what you have remembered about THIS project from earlier sessions. Treat facts and instructions as established unless the current code or the user contradicts them:")
+                for entry in memory {
+                    lines.append("- [\(entry.kind.label)] \(entry.text)")
+                }
+                lines.append("When this run teaches you something durable about the project, record it with the project memory tool (action: remember). Never record secrets, credentials, or transient output.")
             }
-            lines.append("When this run teaches you something durable about the project, record it with the project memory tool (action: remember). Never record secrets, credentials, or transient output.")
         }
         return lines.joined(separator: "\n")
     }

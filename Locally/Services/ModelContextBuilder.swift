@@ -1,52 +1,40 @@
 import Foundation
 
 /// Builds the *effective* system prompt for one turn — the single place
-/// where everything the model is supposed to know about its own setup is
-/// assembled:
+/// where the prompt is assembled from:
 ///
-/// - the user's custom system prompts (the global Settings prompt and the
-///   per-conversation prompt),
-/// - the tools it has (`ToolsRegistry`), with the full argument schemas in
-///   Agent mode and a compact awareness list in Chat mode,
-/// - the system assets it can consult (`SystemAssetsManager` index),
-/// - the skills that exist on this Mac (`SkillsManager`) — all of them by
-///   name, plus the full instructions of the ones the user activated,
+/// - the tiny context directory (`ContextIndexManager`): counts and
+///   category names ONLY — never a catalog,
+/// - the retrieved bundle (`ContextIndexManager`): the small, budgeted
+///   selection of index excerpts the local retriever picked for this
+///   message (custom-prompt chunks, skill excerpts, asset summaries, and
+///   in Agent mode tool schemas and project memory),
 /// - the thinking-tag instruction that `ThinkingModelUI` renders against.
 ///
-/// This type is deliberately pure: callers (on the main actor) gather the
-/// live values from the registries/managers and pass them in, which keeps
-/// the assembly testable and impossible to bypass silently.
+/// Token discipline is the point: nothing is ever injected in full
+/// wholesale — no full tool-schema dump, no full skill markdown, no full
+/// asset text, no whole custom prompt, no memory dump. Callers pass the
+/// pre-rendered directory and bundle from `ContextIndexManager`, and this
+/// builder truncates the bundle to the mode's cap as defense in depth, so
+/// even a caller that overfeeds it cannot blow the budget.
 ///
-/// Why this exists: previously each call site assembled (or forgot to
-/// assemble) its own prompt, and `LLMService` then discarded the result
-/// entirely on the MLX path — so the model answered as if it had no tools,
-/// no system assets, no custom prompt, and no skills, because from what it
-/// actually received, it didn't.
+/// Project context is Agent-mode only: Chat call sites pass nil, and this
+/// builder drops a project block in Chat mode even if one is passed —
+/// the Memory system is never part of a Chat prompt.
+///
+/// This type is deliberately pure: callers (on the main actor) gather the
+/// live values and pass them in, which keeps the assembly testable.
 enum ModelContextBuilder {
 
     struct Input {
-        /// The global custom system prompt (Settings → customSystemPrompt).
-        var globalCustomPrompt: String = ""
-        /// The per-conversation system prompt, if any.
-        var conversationSystemPrompt: String = ""
         /// Whether this turn runs the agent loop (tools executable) or plain chat.
         var isAgentMode: Bool = false
-        /// Include the tools section. Agent call sites whose harness adds its
-        /// own full schema pass `false` here to avoid duplicating it.
-        var includeTools: Bool = true
-        /// Full `ToolsRegistry.schemaDescriptions()` output (Agent mode).
-        var fullToolsSchema: String = ""
-        /// Compact one-line-per-tool list (Chat mode awareness).
-        var compactToolsList: String = ""
-        /// Include the system-assets section. Harnesses that inject their
-        /// own index pass `false`.
-        var includeSystemAssets: Bool = true
-        /// `SystemAssetsManager.generatePromptIndex()` output.
-        var systemAssetsIndex: String = ""
-        /// Every skill discovered on this Mac.
-        var availableSkills: [AgentSkill] = []
-        /// The subset the user toggled on — full instructions are included.
-        var activeSkills: [AgentSkill] = []
+        /// `ContextIndexManager.directoryText` output: counts + category
+        /// names only. The only catalog-shaped text a prompt ever gets.
+        var indexDirectory: String = ""
+        /// `ContextIndexManager.retrievedBundle` output: the budgeted
+        /// excerpts retrieved for this turn's user message.
+        var retrievedContext: String = ""
         /// Thinking mode (Settings) — when on, the model is told to reason
         /// inside <thinking> tags so the UI can separate thought from answer.
         var thinkingEnabled: Bool = false
@@ -56,10 +44,14 @@ enum ModelContextBuilder {
         var knowledgeContext: String? = nil
         /// Display name of the selected model, for the identity line.
         var modelDisplayName: String? = nil
-        /// The active Agent Project's context block (AgentProjectsStore):
-        /// folder, notes, standing instructions, and per-project memory.
+        /// The active Agent Project's context block (AgentProjectsStore).
+        /// AGENT MODE ONLY — ignored in Chat mode by construction.
         var projectContext: String? = nil
     }
+
+    /// Marker appended when the retrieved bundle had to be truncated to
+    /// the mode's budget.
+    static let truncationMarker = "\n[… retrieved context truncated to this mode's token budget]"
 
     static func build(_ input: Input) -> String {
         var sections: [String] = []
@@ -75,68 +67,35 @@ enum ModelContextBuilder {
         }
         sections.append(identity)
 
-        // Custom system prompts — global first, then the conversation's own,
-        // skipping an exact duplicate (ChatDetailView copies the global
-        // prompt into new conversations, which used to double it).
-        let global = input.globalCustomPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let conversation = input.conversationSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        var customParts: [String] = []
-        if !global.isEmpty { customParts.append(global) }
-        if !conversation.isEmpty && conversation != global { customParts.append(conversation) }
-        if !customParts.isEmpty {
-            sections.append("[Custom System Prompt — set by the user, follow it]:\n" + customParts.joined(separator: "\n\n"))
-        }
-
-        // Tools.
-        if input.includeTools {
+        // The index directory — counts and categories only — plus what
+        // the counts mean for this mode. There is deliberately NO tool
+        // list and NO skill list here: capabilities are indexed, and the
+        // excerpts relevant to this message arrive in the retrieved
+        // bundle below.
+        let directory = input.indexDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !directory.isEmpty {
             if input.isAgentMode {
-                if !input.fullToolsSchema.isEmpty {
-                    sections.append("""
-                    [Your Tools — you DO have tools, listed below with their exact argument schemas]:
-                    To call one, output ONLY a single line in this exact format:
-                    TOOL_CALL {"tool": "<tool_id>", "arguments": { ... }}
-                    Never invent a tool id or an argument key that is not in the schema. If a user asks what tools you have, answer from this list.
-
-                    \(input.fullToolsSchema)
-                    """)
-                }
-            } else if !input.compactToolsList.isEmpty {
                 sections.append("""
-                [Your Capabilities — provided by Locally's tools]:
-                \(input.compactToolsList)
+                \(directory)
 
-                You are in Chat mode, where tools are NOT executed. If a task genuinely needs one of these capabilities (reading files, searching the workspace, checking this Mac, …), describe in plain language what you would do and ask the user to switch to Agent mode with the Chat/Agent toggle — do not claim you ran anything, and do not invent a result. If the user asks what you can do, answer from the list above, in plain language.
+                Your capabilities are indexed, not listed: the excerpts retrieved for this message follow below, and during the run you can retrieve more from the index on demand — a tool's full schema before calling it, a system asset's full text, a skill's full instructions, or project memory — instead of guessing.
+                """)
+            } else {
+                sections.append("""
+                \(directory)
+
+                Your capabilities are indexed and retrievable, not listed here. You are in Chat mode, where tools are NOT executed. If a task genuinely needs one of your indexed capabilities (reading files, searching the workspace, checking this Mac, …), describe in plain language what you would do and ask the user to switch to Agent mode with the Chat/Agent toggle — do not claim you ran anything, and do not invent a result. If the user asks what you can do, answer in plain language from the categories above and the excerpts below.
                 """)
             }
         }
 
-        // System assets.
-        if input.includeSystemAssets && !input.systemAssetsIndex.isEmpty {
-            sections.append("""
-            [Your System Assets — built-in guideline documents you can consult]:
-            \(input.systemAssetsIndex)
-            These are real documents stored in the app. In Agent mode you can retrieve any of them in full on demand; in Chat mode, refer to them by name when they are relevant rather than pretending they don't exist.
-            """)
-        }
-
-        // Skills — all available by name/description, active ones in full.
-        if !input.availableSkills.isEmpty || !input.activeSkills.isEmpty {
-            var skillsSection = "[Skills]"
-            if !input.availableSkills.isEmpty {
-                let list = input.availableSkills
-                    .map { "- \($0.name) (\($0.source.rawValue)): \($0.description)" }
-                    .joined(separator: "\n")
-                skillsSection += "\nAvailable skills installed on this Mac:\n" + list
-            }
-            if !input.activeSkills.isEmpty {
-                let active = input.activeSkills
-                    .map { "### Active Skill: \($0.name)\n\($0.fullMarkdown)" }
-                    .joined(separator: "\n\n")
-                skillsSection += "\n\n[Active Skills Instructions — follow these]:\n" + active
-            } else {
-                skillsSection += "\nNo skill is active for this conversation. If a listed skill matches the task, mention it by name so the user can enable it with the sparkles button."
-            }
-            sections.append(skillsSection)
+        // The retrieved bundle, truncated to the mode's cap as defense in
+        // depth (the index manager already enforces the cap; this guards
+        // against any other caller overfeeding the builder).
+        let bundle = input.retrievedContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !bundle.isEmpty {
+            let cap = input.isAgentMode ? ContextIndexManager.agentBundleTokenBudget : ContextIndexManager.chatBundleTokenBudget
+            sections.append(ContextIndexManager.truncate(bundle, toEstimatedTokens: cap, marker: truncationMarker))
         }
 
         // Thinking — the instruction that feeds ThinkingModelUI. Reasoning
@@ -162,8 +121,9 @@ enum ModelContextBuilder {
         }
 
         // Active Agent Project: folder scope, notes, standing instructions,
-        // and the per-project memory the agent must work from.
-        if let project = input.projectContext, !project.isEmpty {
+        // and per-project memory. AGENT MODE ONLY — Chat mode never
+        // receives project context or memory, even if a caller passes it.
+        if input.isAgentMode, let project = input.projectContext, !project.isEmpty {
             sections.append(project)
         }
 
@@ -181,17 +141,5 @@ enum ModelContextBuilder {
         """)
 
         return sections.joined(separator: "\n\n")
-    }
-
-    /// One line per registered tool (`- name — description`), for Chat-mode
-    /// awareness. Deliberately carries NO tool ids: Chat mode cannot call
-    /// tools, so the ids would only teach the model tokens it must never
-    /// say. Full argument schemas (with ids) are Agent-mode only — they
-    /// cost hundreds of tokens a small local model can't spare in plain
-    /// chat, and Agent mode's runtime consumes the ids privately.
-    static func compactToolsList(from tools: [any AssistTool]) -> String {
-        tools
-            .map { "- \($0.name) — \($0.description)" }
-            .joined(separator: "\n")
     }
 }
