@@ -55,6 +55,16 @@ final class ChatViewModel {
     private var downloadTask: Task<Void, Never>?
     private var lastAnnouncedMilestone: Int = 0
 
+    /// The identity of the generation run currently writing into
+    /// `selectedConversation`, if any. All streamed writes, tool events,
+    /// and end-of-run state changes are gated on this id
+    /// (`GenerationRun.shouldApply`): when a run is stopped or superseded
+    /// its id stops matching, so its late tokens, tool results, and final
+    /// answer are dropped instead of overwriting the newer run — and a
+    /// stop aimed at it can never cancel or clear the newer run.
+    private(set) var activeRunID: UUID?
+    private var activeRunConversationID: UUID?
+
     func toggleSkill(_ skill: AgentSkill) {
         if activeSkills.contains(skill) {
             activeSkills.remove(skill)
@@ -321,7 +331,51 @@ final class ChatViewModel {
         generateResponse(for: conversation, in: context, videoURLs: videoURL.map { [$0] } ?? [])
     }
 
+    /// Ends the active run, if any, in favour of a new one: the old task
+    /// is cancelled, the agent harness is cancelled *by the old run's
+    /// id* (a newer run, once started, has a different id and is never
+    /// touched by this), and the active-run slot is cleared so every
+    /// late event from the old run fails the run-id gate from now on.
+    private func supersedeActiveRun() {
+        guard let oldRunID = activeRunID else {
+            generationTask?.cancel()
+            generationTask = nil
+            return
+        }
+        generationTask?.cancel()
+        generationTask = nil
+        AntigravityAgentHarness.shared.cancel(runID: oldRunID)
+        activeRunID = nil
+        activeRunConversationID = nil
+        liveToolCalls = []
+    }
+
+    /// Claims the active-run slot for a new run in `conversation` and
+    /// returns its identity. Any previous run is superseded first, so
+    /// two loops can never write into the UI for one submission.
+    private func beginRun(for conversation: Conversation) -> GenerationRun {
+        supersedeActiveRun()
+        let run = GenerationRun(conversationID: conversation.id)
+        activeRunID = run.id
+        activeRunConversationID = conversation.id
+        return run
+    }
+
+    /// Releases the active-run slot at a run's end — only if the slot
+    /// still belongs to that run. A late-finishing old run must not
+    /// clear the newer run's identity or its `isGenerating` state.
+    private func endRun(_ run: GenerationRun) {
+        guard activeRunID == run.id else { return }
+        activeRunID = nil
+        activeRunConversationID = nil
+        isGenerating = false
+    }
+
     private func generateResponse(for conversation: Conversation, in context: ModelContext, videoURLs: [URL] = []) {
+        // One active run per view model: a new submission (or a
+        // regenerate / edit-and-resend) supersedes whatever was still
+        // generating instead of running two loops into one conversation.
+        let run = beginRun(for: conversation)
         let assistantMessage = Message(role: .assistant, content: "")
         assistantMessage.conversation = conversation
         conversation.messages.append(assistantMessage)
@@ -331,7 +385,7 @@ final class ChatViewModel {
 
         if isAgentMode {
             generationTask = Task {
-                await generateAgentResponse(for: conversation, assistantMessage: assistantMessage, in: context)
+                await generateAgentResponse(for: conversation, assistantMessage: assistantMessage, in: context, run: run)
             }
             return
         }
@@ -435,7 +489,7 @@ final class ChatViewModel {
 
                 func flushPendingTokens(force: Bool) {
                     let now = Date.now
-                    guard !buffer.isEmpty, force || now.timeIntervalSince(lastFlush) >= 0.08 else { return }
+                guard !buffer.isEmpty, force || now.timeIntervalSince(lastFlush) >= GenerationDefaults.streamFlushInterval else { return }
                     assistantMessage.content += buffer
                     buffer = ""
                     lastFlush = now
@@ -444,10 +498,14 @@ final class ChatViewModel {
                 if AppleFoundationModel.isAppleModel(selectedModelID) {
                     // A fresh session per turn, so the self-contained contextual
                     // prompt carries the conversation history.
-                    let events = try InferenceBackends.apple.stream(
+                    let rawEvents = try InferenceBackends.apple.stream(
                         prompt: Self.transcript(from: messages, skipping: conversation.systemPrompt),
                         systemPrompt: effectiveSystemPrompt.isEmpty ? nil : effectiveSystemPrompt
                     )
+                    // The chat duration limit, enforced on the stream:
+                    // a timeout surfaces through the catch below as a
+                    // stated error, not as a silently truncated answer.
+                    let events = StreamTimeout.events(rawEvents, after: GenerationDefaults.maxChatGenerationDuration)
                     for try await event in events {
                         if Task.isCancelled { break }
                         guard case .token(let token) = event else { continue }
@@ -456,14 +514,21 @@ final class ChatViewModel {
                     }
                     flushPendingTokens(force: true)
                 } else {
-                    let stream = try await LLMService.shared.generate(
+                    let rawStream = try await LLMService.shared.generate(
                         messages: messages,
                         videoURLs: videoURLs,
                         imageURLs: turnImageURLs,
                         systemPrompt: effectiveSystemPrompt.isEmpty ? nil : effectiveSystemPrompt,
                         temperature: conversation.temperature
                     )
-                    for await token in stream {
+                    let timedStream = StreamTimeout.tokens(rawStream, after: GenerationDefaults.maxChatGenerationDuration)
+                    for try await token in timedStream {
+                        // This branch previously never checked
+                        // cancellation at all: cancelling the task left
+                        // the MLX stream being consumed (and written
+                        // into the message) until the model finished on
+                        // its own — the stop button appeared broken.
+                        if Task.isCancelled { break }
                         buffer += token
                         flushPendingTokens(force: false)
                     }
@@ -490,16 +555,22 @@ final class ChatViewModel {
                 try? context.save()
                 AccessibilityNotification.Announcement("Response complete").post()
             } catch {
+                // A timeout is not a cancellation: it is reported with
+                // its reason (the partial answer above stays). A user
+                // cancellation stays silent, as before.
                 if !Task.isCancelled {
                     assistantMessage.content += "\n\n[Error: \(error.localizedDescription)]"
                 }
             }
 
-            isGenerating = false
+            // Only the run that still owns the slot may clear it: if a
+            // newer run superseded this one while it was finishing, the
+            // newer run's state is untouched.
+            self.endRun(run)
         }
     }
 
-    private func generateAgentResponse(for conversation: Conversation, assistantMessage: Message, in context: ModelContext) async {
+    private func generateAgentResponse(for conversation: Conversation, assistantMessage: Message, in context: ModelContext, run: GenerationRun) async {
         liveToolCalls = []
         let userPrompt = conversation.sortedMessages.last(where: { $0.role == .user })?.content ?? ""
         let knownToolIDs = ToolsRegistry.shared.allToolIDs
@@ -556,17 +627,40 @@ final class ChatViewModel {
         // sanitized display text is ever written into the message: a tool
         // turn's tokens contain the raw invocation JSON, which belongs to
         // the tool cards, never to the message bubble.
+        //
+        // The display write is THROTTLED: previously every single token
+        // re-ran the full sanitizer over the whole accumulated text and
+        // rewrote the message (re-rendering the conversation) — quadratic
+        // in response length and a direct cause of the UI bogging down
+        // during long generations. Tokens now accumulate privately and
+        // flush on the shared stream cadence; force-flushes happen where
+        // the visible state must be exact (tool turns, run end via the
+        // outcome overwrite below).
         var rawStreamed = ""
+        var lastStreamFlush = Date.now
+        func flushStreamed(force: Bool) {
+            let now = Date.now
+            guard force || now.timeIntervalSince(lastStreamFlush) >= GenerationDefaults.streamFlushInterval else { return }
+            assistantMessage.content = ToolInvocationSanitizer.displayText(for: rawStreamed, knownToolIDs: knownToolIDs)
+            lastStreamFlush = now
+        }
         let outcome = await AntigravityAgentHarness.shared.run(
             prompt: userPrompt,
             modelID: selectedModelID,
             workspaceRoot: project?.rootURL ?? URL.documentsDirectory,
             projectID: project?.id,
             maxTurns: 10,
+            runID: run.id,
             backend: selectedBackend,
             additionalSystemPrompt: agentContextPrompt
         ) { [weak self] event in
             guard let self else { return }
+            // Run-id gate: every event of this run is applied only
+            // while this run is still the active one. A stopped or
+            // superseded run's late tokens, tool events, and failures
+            // are dropped here — they can no longer write into a newer
+            // run's message or resurrect its tool cards.
+            guard GenerationRun.shouldApply(eventRunID: run.id, activeRunID: self.activeRunID) else { return }
             switch event {
             case .toolCallDetected(let tool, let arguments):
                 // A new tool turn begins: the previous turn's streamed
@@ -577,6 +671,7 @@ final class ChatViewModel {
                 // answer overwrites the bubble at the end regardless).
                 rawStreamed = ""
                 assistantMessage.content = ""
+                lastStreamFlush = .now
                 // The MLX loop publishes a structured record for the call
                 // (`toolCallRecordUpdated`); this is the fallback for paths
                 // that only announce the call.
@@ -605,12 +700,23 @@ final class ChatViewModel {
                 }
             case .tokenStreamed(let token):
                 rawStreamed += token
-                assistantMessage.content = ToolInvocationSanitizer.displayText(for: rawStreamed, knownToolIDs: knownToolIDs)
+                flushStreamed(force: false)
             case .failed(let err):
                 assistantMessage.content += "\n\n[Agent Error: \(err)]"
             default:
                 break
             }
+        }
+
+        // The outcome applies only if this run is still the active one
+        // for its conversation. A run that was stopped or superseded
+        // while the harness was finishing must not overwrite the newer
+        // run's message, attach its tool records to this conversation,
+        // or leave a project session note for work the user discarded.
+        guard GenerationRun.shouldApply(eventRunID: run.id, activeRunID: activeRunID),
+              activeRunConversationID == conversation.id else {
+            endRun(run)
+            return
         }
 
         // The outcome's answer is authoritative (and already cleaned by the
@@ -660,16 +766,33 @@ final class ChatViewModel {
 
         conversation.updatedAt = .now
         try? context.save()
-        self.isGenerating = false
+        endRun(run)
     }
 
+    /// Stops the ACTIVE run — and only that run.
+    ///
+    /// The stop is scoped by the active run's id end to end: the run's
+    /// task is cancelled (which propagates into the generation stream
+    /// and the agent loop), the harness is cancelled *by that id* so a
+    /// newer run started afterwards is never touched, and the
+    /// active-run slot is cleared so any event the stopped run still
+    /// emits fails the run-id gate and is dropped. Tool executions the
+    /// run already completed stay in its steps/records — cancellation
+    /// reports what already took effect, it does not rewrite it.
     func stopGenerating() {
+        let stoppedRunID = activeRunID
         generationTask?.cancel()
         generationTask = nil
-        if isAgentMode {
+        if let stoppedRunID {
+            AntigravityAgentHarness.shared.cancel(runID: stoppedRunID)
+        } else if isAgentMode {
             AntigravityAgentHarness.shared.cancel()
+        }
+        if isAgentMode {
             liveToolCalls = []
         }
+        activeRunID = nil
+        activeRunConversationID = nil
         isGenerating = false
     }
 

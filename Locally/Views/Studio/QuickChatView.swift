@@ -11,6 +11,11 @@ struct QuickChatView: View {
     @State private var response = ""
     @State private var isRunning = false
     @State private var errorText: String?
+    /// The current Quick Chat run, so it can actually be stopped (and a
+    /// new run supersedes the old one instead of two streams writing
+    /// into one response).
+    @State private var runTask: Task<Void, Never>?
+    @State private var activeRunID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -49,7 +54,16 @@ struct QuickChatView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isRunning || prompt.trimmingCharacters(in: .whitespaces).isEmpty || selectedModel == nil)
-                if isRunning { ProgressView().controlSize(.small) }
+                if isRunning {
+                    ProgressView().controlSize(.small)
+                    Button {
+                        stop()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
                 Spacer()
                 if let errorText {
                     Text(errorText).font(.caption).foregroundStyle(.red).lineLimit(2)
@@ -90,8 +104,23 @@ struct QuickChatView: View {
             ?? chatViewModel.modelChoices.first
     }
 
+    /// Stops the active Quick Chat run: cancels its task (the stream
+    /// loop below checks cancellation per token and the backend stream
+    /// tears down via its termination handler) and clears the run id so
+    /// any late token from it is dropped by the run-id gate.
+    private func stop() {
+        runTask?.cancel()
+        runTask = nil
+        activeRunID = nil
+        isRunning = false
+    }
+
     private func run() {
         guard let model = selectedModel else { return }
+        // A new run supersedes any run still streaming.
+        runTask?.cancel()
+        let runID = UUID()
+        activeRunID = runID
         isRunning = true
         errorText = nil
         response = ""
@@ -126,19 +155,28 @@ struct QuickChatView: View {
                 projectContext: nil
             )
         )
-        Task {
+        runTask = Task {
             do {
                 _ = try await backend.load(model: model)
-                let stream = try backend.stream(prompt: text, systemPrompt: systemPrompt)
+                let rawStream = try backend.stream(prompt: text, systemPrompt: systemPrompt)
+                let stream = StreamTimeout.events(rawStream, after: GenerationDefaults.maxChatGenerationDuration)
                 for try await event in stream {
+                    if Task.isCancelled { break }
+                    // Drop late tokens from a stopped/superseded run.
+                    guard activeRunID == runID else { break }
                     if case .token(let token) = event {
                         response += token
                     }
                 }
             } catch {
-                errorText = error.localizedDescription
+                if !Task.isCancelled, activeRunID == runID {
+                    errorText = error.localizedDescription
+                }
             }
-            isRunning = false
+            if activeRunID == runID {
+                activeRunID = nil
+                isRunning = false
+            }
         }
     }
 }
