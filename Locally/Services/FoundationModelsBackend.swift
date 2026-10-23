@@ -23,7 +23,13 @@ nonisolated enum AppleLanguageModel {
                     // prompt (history included), and a new session also clears
                     // the model's 4K-token context between turns.
                     let session = LanguageModelSession(instructions: systemPrompt)
-                    let options = GenerationOptions(temperature: temperature)
+                    // Bounded output (`GenerationDefaults`): the on-device
+                    // context is ~4K tokens, so an uncapped response can
+                    // crowd out the conversation that produced it.
+                    let options = GenerationOptions(
+                        temperature: GenerationDefaults.temperature(temperature),
+                        maximumResponseTokens: GenerationDefaults.maxAppleModelOutputTokens
+                    )
                     let start = Date.now
                     var accumulated = ""
                     var firstTokenAt: Date?

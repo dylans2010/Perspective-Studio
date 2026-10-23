@@ -257,7 +257,12 @@ final class ContextIndexManagerTests: XCTestCase {
     }
 
     func testSkillExcerptIsTruncatedWithRetrievalNote() {
-        let markdown = String(repeating: "a", count: 1_100) + "MIDDLE-MARKER" + String(repeating: "b", count: 3_000) + "FAR-TAIL-MARKER"
+        // The query must actually relate to the skill: after the
+        // relevance repair, an active skill is NOT injected for an
+        // unrelated query (that unconditional injection was the bug —
+        // see ConversationQualityTests). The markdown therefore leads
+        // with the query's own words so the excerpt path is exercised.
+        let markdown = "unrelated words here " + String(repeating: "a", count: 1_100) + "MIDDLE-MARKER" + String(repeating: "b", count: 3_000) + "FAR-TAIL-MARKER"
         let active = skill(name: "Long", markdown: markdown, active: true)
         let entries = makeIndex(mode: .agent, skills: [active], activeSkillIDs: [active.id])
         let bundle = ContextIndexManager.retrievedBundle(entries: entries, query: "unrelated words here", mode: .agent)
@@ -324,27 +329,28 @@ final class ContextIndexManagerTests: XCTestCase {
 
     // MARK: - Precomputed token scoring
 
-    /// The reference implementation of the ORIGINAL scoring formula,
-    /// tokenizing on every call. `score()` must agree with it exactly —
-    /// the precomputed token sets are a performance change, not a
-    /// behavior change.
+    /// The reference implementation of the scoring formula, tokenizing
+    /// on every call. `score()` must agree with it exactly. (Updated for
+    /// the relevance repair: an active skill's +300 boost now applies
+    /// only when the entry has a lexical match — the unconditional boost
+    /// injected active skills into unrelated turns, greetings included.)
     private func referenceScore(entry: ContextIndexManager.Entry, queryTokens: [String]) -> Int {
-        var total = 0
-        if entry.kind == .customPrompt { total += 500 }
-        if entry.kind == .skill && entry.isActiveSkill { total += 300 }
-        guard !queryTokens.isEmpty else { return total }
         let titleTokens = Set(ContextIndexManager.tokenize(entry.title))
         let keywordTokens = Set(entry.keywords.flatMap { ContextIndexManager.tokenize($0) })
         let descriptionTokens = Set(ContextIndexManager.tokenize(entry.description))
         let payloadTokens = Set(ContextIndexManager.tokenize(entry.payload))
+        var lexical = 0
         var payloadHits = 0
         for token in queryTokens {
-            if titleTokens.contains(token) { total += 10 }
-            if keywordTokens.contains(token) { total += 6 }
-            if descriptionTokens.contains(token) { total += 3 }
+            if titleTokens.contains(token) { lexical += 10 }
+            if keywordTokens.contains(token) { lexical += 6 }
+            if descriptionTokens.contains(token) { lexical += 3 }
             if payloadTokens.contains(token) { payloadHits += 1 }
         }
-        total += min(payloadHits, 5)
+        lexical += min(payloadHits, 5)
+        var total = lexical
+        if entry.kind == .customPrompt { total += 500 }
+        if entry.kind == .skill && entry.isActiveSkill && lexical > 0 { total += 300 }
         return total
     }
 

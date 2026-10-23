@@ -113,10 +113,20 @@ actor LLMService {
         }
     }
 
-    /// Builds MLX generation parameters, honoring the caller's temperature.
-    private static func generateParameters(temperature: Double?) -> GenerateParameters {
-        guard let temperature else { return GenerateParameters() }
-        return GenerateParameters(temperature: Float(temperature))
+    /// Builds MLX generation parameters from `GenerationDefaults`:
+    /// the caller's temperature (or the conversational fallback when
+    /// none was supplied — previously `nil` silently meant the engine's
+    /// compiled-in default), top-p, and a hard maximum output-token cap
+    /// so no generation can ramble until the context window fills.
+    /// Stop behavior comes from the model's own EOS / chat-template
+    /// end-of-turn token, which MLX applies itself; there is no
+    /// stop-string API to configure and none is invented.
+    private static func generateParameters(temperature: Double?, maxTokens: Int = GenerationDefaults.maxChatOutputTokens) -> GenerateParameters {
+        GenerateParameters(
+            maxTokens: maxTokens,
+            temperature: Float(GenerationDefaults.temperature(temperature)),
+            topP: GenerationDefaults.topP
+        )
     }
 
     func generate(

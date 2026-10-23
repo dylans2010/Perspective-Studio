@@ -151,13 +151,20 @@ enum FoundationModelAgentRunner {
             toolEventsContinuation.yield(event)
         }
 
-        let runToolIDs = Self.runToolIDs(query: prompt, projectID: projectID, computerUseEnabled: ComputerUseSettings.isEnabled)
+        // Conversational turns get NO tools at all: a session with an
+        // empty tool set can only converse, which is the point — the
+        // old path offered the retrieval tools for "hello" too, and
+        // the model used them and recited what it retrieved.
+        let intent = ConversationRouter.intent(for: prompt)
+        let runToolIDs = intent == .conversational
+            ? []
+            : Self.runToolIDs(query: prompt, projectID: projectID, computerUseEnabled: ComputerUseSettings.isEnabled)
         let bridges: [any Tool] = runToolIDs.compactMap { toolID in
             guard let tool = registry.tool(for: toolID) else { return nil }
             return try? AssistToolBridge(tool: tool, context: context, onEvent: bridgeHandler)
         }
 
-        guard !bridges.isEmpty else {
+        guard !bridges.isEmpty || intent == .conversational else {
             let message = "No tools are registered, so agent mode cannot run."
             dispatchStatus(.failed(message))
             addStep(AgentStep(kind: .error, title: "Tools Unavailable", detail: message))
@@ -207,13 +214,13 @@ enum FoundationModelAgentRunner {
 
         dispatchStatus(.thinking)
 
-        let instructions = buildInstructions(toolNames: bridges.map(\.name), additionalSystemPrompt: additionalSystemPrompt)
+        let instructions = buildInstructions(additionalSystemPrompt: additionalSystemPrompt)
         let session = LanguageModelSession(tools: bridges, instructions: instructions)
 
         var answer = ""
         var previous = ""
         do {
-            for try await snapshot in session.streamResponse(to: prompt, options: GenerationOptions(temperature: 0.4)) {
+            for try await snapshot in session.streamResponse(to: prompt, options: GenerationOptions(temperature: 0.4, maximumResponseTokens: GenerationDefaults.maxAppleModelOutputTokens)) {
                 if Task.isCancelled {
                     eventPump.cancel()
                     toolEventsContinuation.finish()
@@ -253,7 +260,8 @@ enum FoundationModelAgentRunner {
                toolCallsExecuted: collector.steps.filter { $0.kind == .toolCall }.count,
                projectActive: true,
                requireToolUse: project.requireToolUse,
-               rejectionsUsed: 0
+               rejectionsUsed: 0,
+               intent: intent
            ) {
             record(AgentStep(
                 kind: .thought,
@@ -296,7 +304,7 @@ enum FoundationModelAgentRunner {
                 var groundedPrevious = ""
                 var groundedAnswer = ""
                 do {
-                    for try await snapshot in session.streamResponse(to: groundingPrompt, options: GenerationOptions(temperature: 0.4)) {
+                    for try await snapshot in session.streamResponse(to: groundingPrompt, options: GenerationOptions(temperature: 0.4, maximumResponseTokens: GenerationDefaults.maxAppleModelOutputTokens)) {
                         if Task.isCancelled { break }
                         let text = snapshot.content
                         let delta = text.hasPrefix(groundedPrevious) ? String(text.dropFirst(groundedPrevious.count)) : text
@@ -329,7 +337,7 @@ enum FoundationModelAgentRunner {
         return AgentExecutionOutcome(answer: answer, steps: collector.steps, success: true)
     }
 
-    private static func buildInstructions(toolNames: [String], additionalSystemPrompt: String? = nil) -> String {
+    private static func buildInstructions(additionalSystemPrompt: String? = nil) -> String {
         // Counts-only directory from the context index — never the full
         // asset index or any catalog. Full entries are retrieved on
         // demand through the offered lookup tools.
@@ -344,7 +352,7 @@ enum FoundationModelAgentRunner {
         # Locally Agent Runtime
 
         You are an autonomous assistant running privately on this Mac with Apple Intelligence.
-        You have these tools: \(toolNames.joined(separator: ", ")).
+        Tools are available to you through the system when a task needs them; never name, list, or describe them in your answers.
         \(sdkLine)
         \(indexLine)
         \(computerLine)
@@ -359,8 +367,7 @@ enum FoundationModelAgentRunner {
         \(directory)
 
         ## Response style
-        - Lead with the answer.
-        - Use Markdown headings, lists and fenced code blocks when they help.
+        - Lead with the answer, and match its size to the request: a greeting or simple question gets a brief plain reply with no headings or lists; structure substantial answers with Markdown when it helps.
         - Keep it short enough to fit an on-device model's context.
         """
 

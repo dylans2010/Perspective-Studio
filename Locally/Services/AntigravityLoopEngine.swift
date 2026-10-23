@@ -68,6 +68,26 @@ public enum AntigravityLoopEngine {
         """
     }
 
+    // MARK: - No-progress guard
+
+    /// How many times the exact same tool call (same tool, same
+    /// arguments) may execute in one run before the loop stops it: a
+    /// third identical request cannot produce new information, and the
+    /// old loop happily re-ran it until the turn cap.
+    public nonisolated static let maxIdenticalToolExecutions = 2
+
+    /// Canonical signature of one tool call for repetition detection.
+    /// `canonicalArguments` must be a deterministic rendering of the
+    /// arguments (the harness passes sorted-keys JSON).
+    public nonisolated static func toolCallSignature(toolID: String, canonicalArguments: String) -> String {
+        "\(toolID)|\(canonicalArguments)"
+    }
+
+    /// True when executing this call again would be a no-progress repeat.
+    public nonisolated static func isNoProgressRepeat(signature: String, previousSignatures: [String]) -> Bool {
+        previousSignatures.filter { $0 == signature }.count >= maxIdenticalToolExecutions
+    }
+
     /// Splits a model turn into its reasoning and its answer using the
     /// same parser the chat UI renders with (`ThinkingContentParser`).
     /// Agent turns need this as much as chat turns do: a reasoning model's

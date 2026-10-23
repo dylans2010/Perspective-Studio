@@ -42,8 +42,55 @@ public enum ToolInvocationSanitizer {
     /// raw tool identifiers redacted, leftover blank space collapsed.
     public nonisolated static func displayText(for text: String, knownToolIDs: Set<String>) -> String {
         let stripped = stripInvocations(from: text, knownToolIDs: knownToolIDs)
-        let redacted = redactToolIdentifiers(in: stripped, knownToolIDs: knownToolIDs)
+        let markersRemoved = stripInternalMarkers(from: stripped)
+        let redacted = redactToolIdentifiers(in: markersRemoved, knownToolIDs: knownToolIDs)
         return collapseBlankSpace(redacted)
+    }
+
+    // MARK: - Internal loop markers (defense in depth)
+
+    /// Removes THIS app's own internal loop-control markers if a model
+    /// echoes them. This is deliberately a closed list of exact internal
+    /// strings the runtime itself generated — not a general bracket or
+    /// tag stripper (legitimate bracketed text and Markdown survive).
+    ///
+    /// Origin fix, not just filtering: the loop no longer writes the
+    /// "withheld" draft marker into the model-visible history at all
+    /// (see `AntigravityAgentHarness`); these removals exist so messages
+    /// persisted by older builds, and any model paraphrase of the old
+    /// history, still render cleanly.
+    public nonisolated static func stripInternalMarkers(from text: String) -> String {
+        var result = text
+
+        // Bracketed loop markers: "[Answer withheld]", "[Draft answer
+        // withheld — no tools used yet]", "[Used a tool: …]". Remove the
+        // whole bracketed segment for these known prefixes only.
+        for prefix in ["[Answer withheld", "[Draft answer withheld", "[Used a tool:"] {
+            while let start = result.range(of: prefix) {
+                if let end = result.range(of: "]", range: start.upperBound..<result.endIndex) {
+                    result.removeSubrange(start.lowerBound..<end.upperBound)
+                } else {
+                    result = String(result[..<start.lowerBound])
+                    break
+                }
+            }
+        }
+
+        // Instruction-echo lines: the model paraphrasing its own prompt
+        // back ("Response Style: Write your final answer below the
+        // tags."). Origin fix: the harness prompt no longer presents a
+        // "Response Style:" block telling the model where to write its
+        // final answer; this drops the known echoed line form if a
+        // model still produces it.
+        let lines = result.components(separatedBy: "\n").filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let lowered = trimmed.lowercased()
+            let isEcho = (lowered.hasPrefix("response style:") || lowered.hasPrefix("response style —"))
+                && (lowered.contains("final answer") || lowered.contains("below the tags") || lowered.contains("after the closing tag"))
+            return !isEcho
+        }
+        result = lines.joined(separator: "\n")
+        return result
     }
 
     /// Removes tool-invocation payloads, leaving the surrounding prose.

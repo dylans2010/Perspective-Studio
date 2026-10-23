@@ -393,9 +393,15 @@ final class ChatViewModel {
                 let globalPrompt = UserDefaults.standard.string(forKey: "customSystemPrompt") ?? ""
                 let conversationPrompt = conversation.systemPrompt ?? ""
                 let activeSkillIDs = Set(activeSkills.map(\.id))
+                // The router classifies the turn BEFORE any retrieval:
+                // conversational turns get no directory and a standing-
+                // instructions-only bundle, so a greeting cannot be
+                // answered with a capability recitation.
+                let intent = ConversationRouter.intent(for: lastUserContent)
                 let effectiveSystemPrompt = ModelContextBuilder.build(
                     ModelContextBuilder.Input(
                         isAgentMode: false,
+                        intent: intent,
                         indexDirectory: ContextIndexManager.directoryText(
                             mode: .chat,
                             globalCustomPrompt: globalPrompt,
@@ -407,7 +413,8 @@ final class ChatViewModel {
                             mode: .chat,
                             globalCustomPrompt: globalPrompt,
                             conversationCustomPrompt: conversationPrompt,
-                            activeSkillIDs: activeSkillIDs
+                            activeSkillIDs: activeSkillIDs,
+                            intent: intent
                         ),
                         thinkingEnabled: ThinkingSettings.isEnabled,
                         thinkingBudget: ThinkingSettings.budget,
@@ -522,9 +529,11 @@ final class ChatViewModel {
         // twice.
         let globalPrompt = UserDefaults.standard.string(forKey: "customSystemPrompt") ?? ""
         let conversationPrompt = conversation.systemPrompt ?? ""
+        let agentIntent = ConversationRouter.intent(for: userPrompt)
         let agentContextPrompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
                 isAgentMode: true,
+                intent: agentIntent,
                 indexDirectory: "",
                 retrievedContext: ContextIndexManager.retrievedBundle(
                     query: userPrompt,
@@ -533,7 +542,8 @@ final class ChatViewModel {
                     conversationCustomPrompt: conversationPrompt,
                     activeSkillIDs: Set(activeSkills.map(\.id)),
                     project: project,
-                    includeToolSchemas: false
+                    includeToolSchemas: false,
+                    intent: agentIntent
                 ),
                 thinkingEnabled: ThinkingSettings.isEnabled,
                 thinkingBudget: ThinkingSettings.budget,
@@ -559,6 +569,14 @@ final class ChatViewModel {
             guard let self else { return }
             switch event {
             case .toolCallDetected(let tool, let arguments):
+                // A new tool turn begins: the previous turn's streamed
+                // prose was intermediate activity for a turn the loop
+                // consumed, not final-answer text. Reset the stream
+                // accumulator so intermediate turns never accumulate
+                // into the visible bubble across turns (the outcome's
+                // answer overwrites the bubble at the end regardless).
+                rawStreamed = ""
+                assistantMessage.content = ""
                 var strArgs: [String: String] = [:]
                 for (k, v) in arguments {
                     strArgs[k] = "\(v)"

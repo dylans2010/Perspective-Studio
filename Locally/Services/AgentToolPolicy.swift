@@ -21,13 +21,23 @@ public enum AgentToolPolicy {
 
     /// True when a would-be final answer must be rejected and the model
     /// sent back to call a tool first.
+    ///
+    /// The mandate applies to TASK turns only: a greeting or a direct
+    /// question asked while a project happens to be selected is still
+    /// conversation, and forcing a tool call for it (the old behavior —
+    /// a project greeting triggered an exploration run, and the loop's
+    /// rejection machinery leaked its "[Draft answer withheld]" marker
+    /// into the model-visible history) is exactly the failure this
+    /// policy now excludes via `intent`.
     public nonisolated static func mustRejectFinalAnswer(
         toolCallsExecuted: Int,
         projectActive: Bool,
         requireToolUse: Bool,
-        rejectionsUsed: Int
+        rejectionsUsed: Int,
+        intent: ConversationIntent = .task
     ) -> Bool {
-        projectActive
+        intent == .task
+            && projectActive
             && requireToolUse
             && toolCallsExecuted == 0
             && rejectionsUsed < maxProjectToolRejections

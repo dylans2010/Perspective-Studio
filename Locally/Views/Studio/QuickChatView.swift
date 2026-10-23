@@ -103,9 +103,11 @@ struct QuickChatView: View {
         // plus the excerpts retrieved for this prompt. Like all Chat
         // surfaces it receives NO project context — memory is Agent-only.
         let globalPrompt = UserDefaults.standard.string(forKey: "customSystemPrompt") ?? ""
+        let quickIntent = ConversationRouter.intent(for: text)
         let systemPrompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
                 isAgentMode: false,
+                intent: quickIntent,
                 indexDirectory: ContextIndexManager.directoryText(
                     mode: .chat,
                     globalCustomPrompt: globalPrompt,
@@ -115,7 +117,8 @@ struct QuickChatView: View {
                     query: text,
                     mode: .chat,
                     globalCustomPrompt: globalPrompt,
-                    activeSkillIDs: Set(chatViewModel.activeSkills.map(\.id))
+                    activeSkillIDs: Set(chatViewModel.activeSkills.map(\.id)),
+                    intent: quickIntent
                 ),
                 thinkingEnabled: ThinkingSettings.isEnabled,
                 thinkingBudget: ThinkingSettings.budget,

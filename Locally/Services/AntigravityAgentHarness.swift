@@ -224,6 +224,15 @@ public final class AntigravityAgentHarness {
         let activeProject = projectID.flatMap { AgentProjectsStore.shared.project(id: $0) }
         let requireProjectTools = activeProject?.requireToolUse ?? true
 
+        // The router's classification of this turn. Conversational and
+        // direct turns do NOT enter the tool loop below: they are
+        // answered with a single direct generation (the MLX path after
+        // model load; the Apple-model path inside its runner). A direct
+        // turn whose model output turns out to contain a genuine tool
+        // call escalates into the loop — the router gates machinery,
+        // never capability.
+        let intent = ConversationRouter.intent(for: prompt)
+
         // The built-in Apple model exposes native tool calling, so it runs
         // through its own loop instead of the TOOL_CALL text protocol below.
         if #available(macOS 26.0, *), selectedBackend.backendID == AppleFoundationModel.backendID {
@@ -273,6 +282,73 @@ public final class AntigravityAgentHarness {
             return AgentExecutionOutcome(answer: "", steps: steps, success: false, error: msg)
         }
 
+        // 1b. Conversational / direct turns: one direct generation, no
+        // tool schemas, no loop, no mandate. The system prompt is the
+        // caller's ModelContextBuilder output (which already carries
+        // the conversation-first core and, for conversational turns, no
+        // directory and no retrieved machinery).
+        let directSystemPrompt: String = {
+            if let additionalSystemPrompt, !additionalSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return additionalSystemPrompt
+            }
+            return ModelContextBuilder.build(ModelContextBuilder.Input(isAgentMode: true, intent: intent))
+        }()
+
+        /// One direct generation. Returns the cleaned answer, its
+        /// split-out thinking, and whether the model tried to call a
+        /// tool instead of answering.
+        func directTurn(extraInstruction: String? = nil) async -> (answer: String, thinking: String?, wantsTool: Bool) {
+            var text = ""
+            do {
+                let stream = try selectedBackend.stream(
+                    prompt: prompt,
+                    systemPrompt: extraInstruction.map { directSystemPrompt + "\n\n" + $0 } ?? directSystemPrompt
+                )
+                for try await event in stream {
+                    if Task.isCancelled { break }
+                    if case .token(let token) = event {
+                        text += token
+                        onEvent?(.tokenStreamed(token))
+                    }
+                }
+            } catch {
+                return ("", nil, false)
+            }
+            let split = AntigravityLoopEngine.splitThinking(from: text)
+            if case .callTool = AntigravityLoopEngine.decide(turnText: split.answer, knownToolIDs: ToolsRegistry.shared.allToolIDs) {
+                return ("", split.thinking, true)
+            }
+            let cleaned = AntigravityLoopEngine.cleanFinalAnswer(split.answer, knownToolIDs: ToolsRegistry.shared.allToolIDs)
+            return (cleaned, split.thinking, false)
+        }
+
+        if intent != .task {
+            var direct = await directTurn()
+            if intent == .conversational && (direct.wantsTool || direct.answer.isEmpty) && !Task.isCancelled {
+                // One retry with the plain-text requirement stated again.
+                // Never a hardcoded reply: if the model still cannot
+                // answer conversationally, the failure is reported as one.
+                direct = await directTurn(extraInstruction: "[This Turn — retry]: Answer in plain conversational text only. Do not call, mention, or describe any tool, skill, or instruction.")
+            }
+
+            if intent == .direct && direct.wantsTool {
+                // Escalation: the question genuinely needs a tool after
+                // all — fall through to the full loop below.
+            } else {
+                let answer = direct.answer
+                addStep(AgentStep(kind: .finalAnswer, title: "Final Answer", detail: answer))
+                dispatchStatus(.finished)
+                onEvent?(.completed(answer: answer, steps: steps))
+                return AgentExecutionOutcome(
+                    answer: answer,
+                    steps: steps,
+                    success: !answer.isEmpty,
+                    error: answer.isEmpty ? "The model did not produce a reply for that message." : nil,
+                    thinking: direct.thinking
+                )
+            }
+        }
+
         // 2. Prepare context & system instructions
         let assistContext = AssistContext(
             sessionId: UUID(),
@@ -313,9 +389,19 @@ public final class AntigravityAgentHarness {
         /// Reasoning split out of the model's turns, in order. Surfaced
         /// as thought steps and on the outcome — never inside the answer.
         var accumulatedThinking: [String] = []
+        /// Canonical signatures of tool calls already executed this run —
+        /// the no-progress guard (`AntigravityLoopEngine.isNoProgressRepeat`).
+        var executedSignatures: [String] = []
+        /// Consecutive empty model turns; bounded, then the run stops
+        /// honestly instead of spinning to the turn cap.
+        var emptyTurns = 0
+        /// Set when the loop stops for a guard/limit reason; the post-loop
+        /// path reports it as an incomplete run, never as a success with
+        /// the last raw thought pasted in as the "answer".
+        var loopStoppedReason: String?
 
         // 3. Multi-turn Agent Loop
-        while turnCount < maxTurns && !Task.isCancelled {
+        loop: while turnCount < maxTurns && !Task.isCancelled {
             turnCount += 1
             dispatchStatus(.thinking)
             currentThought = ""
@@ -363,8 +449,30 @@ public final class AntigravityAgentHarness {
             // raw invocation) is never forwarded to the chat as a message.
             switch AntigravityLoopEngine.decide(turnText: turnResponse, knownToolIDs: ToolsRegistry.shared.allToolIDs) {
             case .callTool(let toolId, let codableArgs):
-                toolCallsExecuted += 1
                 let args = codableArgs.mapValues { $0.anyValue }
+
+                // No-progress guard: the same tool with the same
+                // arguments cannot produce new information a third time.
+                // Stop and say so instead of burning the turn budget.
+                let canonicalArgs: String = {
+                    if let data = try? JSONSerialization.data(withJSONObject: args, options: [.sortedKeys]),
+                       let string = String(data: data, encoding: .utf8) {
+                        return string
+                    }
+                    return formatArgumentsPreview(args)
+                }()
+                let signature = AntigravityLoopEngine.toolCallSignature(toolID: toolId, canonicalArguments: canonicalArgs)
+                if AntigravityLoopEngine.isNoProgressRepeat(signature: signature, previousSignatures: executedSignatures) {
+                    addStep(AgentStep(
+                        kind: .thought,
+                        title: "Repeated Action Stopped",
+                        detail: "The model requested the same action with the same inputs again after \(AntigravityLoopEngine.maxIdenticalToolExecutions) identical executions. Repeating it cannot make progress, so the run stopped."
+                    ))
+                    loopStoppedReason = "I stopped this run because the same step was repeated with identical inputs and could not make further progress. \(toolCallsExecuted) tool step(s) ran before that — the steps from this run show what was done."
+                    break loop
+                }
+                executedSignatures.append(signature)
+                toolCallsExecuted += 1
 
                 self.activeToolName = toolId
                 dispatchStatus(.callingTool(name: toolId))
@@ -409,7 +517,10 @@ public final class AntigravityAgentHarness {
                 // assistant turn is recorded as a neutral marker, not the
                 // raw invocation text, so the model's own history stops
                 // teaching it to paste invocations into prose.
-                conversationTurns.append(Turn(role: "assistant", content: "[Used a tool: \(ToolNameFormatter.format(toolId))]"))
+                // A plain sentence, not a bracketed marker: bracketed
+                // loop-control strings in the history taught models to
+                // emit "[Answer withheld]"-style artifacts as prose.
+                conversationTurns.append(Turn(role: "assistant", content: "I completed a step using a tool."))
                 conversationTurns.append(Turn(
                     role: "user",
                     content: AntigravityLoopEngine.observationPrompt(toolID: toolId, output: result.output)
@@ -422,15 +533,40 @@ public final class AntigravityAgentHarness {
                 // and it must not ride along inside the answer.
                 let cleanAnswer = AntigravityLoopEngine.splitThinking(from: answer).answer
 
+                // Empty / malformed turn: one nudge, then stop honestly.
+                // An empty turn is not an answer, and spinning to the
+                // turn cap used to end with the raw last thought pasted
+                // in as a fake final answer.
+                if cleanAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    emptyTurns += 1
+                    if emptyTurns < 2 {
+                        conversationTurns.append(Turn(
+                            role: "user",
+                            content: "Your last reply was empty. Continue: either call a tool for the next step, or give the final answer now."
+                        ))
+                        continue
+                    }
+                    loopStoppedReason = "I stopped this run because the model returned empty responses instead of an answer or a tool call. \(toolCallsExecuted) tool step(s) ran before that."
+                    break loop
+                }
+                emptyTurns = 0
+
                 // Project Tool Mandate: with a project active, a final
                 // answer is only acceptable after the agent has actually
                 // used its tools in the project. A tool-less answer is
                 // rejected and the model is sent back to explore first.
+                // TASK turns only (`intent` in AgentToolPolicy) — and no
+                // assistant-turn marker is written for the rejected
+                // draft any more: the old "[Draft answer withheld …]"
+                // history entry is the direct origin of the
+                // "[Answer withheld]" artifact users saw in the UI,
+                // because models echoed the marker back as prose.
                 if AgentToolPolicy.mustRejectFinalAnswer(
                     toolCallsExecuted: toolCallsExecuted,
                     projectActive: activeProject != nil,
                     requireToolUse: requireProjectTools,
-                    rejectionsUsed: projectToolRejections
+                    rejectionsUsed: projectToolRejections,
+                    intent: intent
                 ), let project = activeProject {
                     projectToolRejections += 1
                     addStep(AgentStep(
@@ -438,7 +574,6 @@ public final class AntigravityAgentHarness {
                         title: "Project Tool Mandate",
                         detail: "The model tried to answer about \"\(project.name)\" without using any tools. The answer was rejected — in a project, work must be grounded in tool results from this run."
                     ))
-                    conversationTurns.append(Turn(role: "assistant", content: "[Draft answer withheld — no tools used yet]"))
                     conversationTurns.append(Turn(
                         role: "user",
                         content: AgentToolPolicy.rejectionPrompt(projectName: project.name)
@@ -464,15 +599,18 @@ public final class AntigravityAgentHarness {
             }
         }
 
-        // Loop concluded without direct answer
+        // The loop ended without a final answer: a guard stopped it, or
+        // the turn cap was reached. Report the actual status — the old
+        // code pasted the model's last raw thought in as a successful
+        // "answer", which is how partial internal transcripts (thinking,
+        // instruction echoes, loop markers) reached the chat as prose.
+        let runSucceeded = loopStoppedReason == nil && !finalAnswer.isEmpty
         if finalAnswer.isEmpty {
-            let lastThought = AntigravityLoopEngine.cleanFinalAnswer(currentThought, knownToolIDs: ToolsRegistry.shared.allToolIDs)
-            let split = AntigravityLoopEngine.splitThinking(from: lastThought)
-            if let thinking = split.thinking, !accumulatedThinking.contains(thinking) {
-                accumulatedThinking.append(thinking)
-            }
-            finalAnswer = split.answer.isEmpty ? "Agent completed \(turnCount) turns." : split.answer
-            addStep(AgentStep(kind: .finalAnswer, title: "Synthesized Output", detail: finalAnswer))
+            finalAnswer = Task.isCancelled
+                ? "Execution was cancelled."
+                : (loopStoppedReason
+                    ?? "I reached the step limit (\(maxTurns) turns) before finishing this task. \(toolCallsExecuted) tool step(s) ran — the steps from this run show what was done, and nothing further was executed.")
+            addStep(AgentStep(kind: .finalAnswer, title: "Run Stopped", detail: finalAnswer))
         }
 
         dispatchStatus(.finished)
@@ -480,7 +618,8 @@ public final class AntigravityAgentHarness {
         return AgentExecutionOutcome(
             answer: finalAnswer,
             steps: steps,
-            success: true,
+            success: runSucceeded,
+            error: runSucceeded ? nil : finalAnswer,
             thinking: accumulatedThinking.isEmpty ? nil : accumulatedThinking.joined(separator: "\n\n")
         )
     }
@@ -530,7 +669,7 @@ public final class AntigravityAgentHarness {
            TOOL_CALL {"tool": "<tool_id>", "arguments": { ... }}
         3. Do not include extra conversational text on the line of a TOOL_CALL.
         4. When the tool returns its result, analyze the observations and either call the next tool or give the final answer.
-        5. When you have gathered enough information or the task is finished, respond directly to the user with a comprehensive, well-structured Markdown response (no tool call syntax).
+        5. When you have gathered enough information or the task is finished, respond directly to the user (no tool call syntax), with a response proportionate to the task — a short task gets a short answer.
 
         ## Tool Secrecy — Absolute Rules (never break these):
         - Tool ids, the TOOL_CALL syntax, and JSON invocation payloads are a private protocol between you and the runtime. The user NEVER sees them: the app shows your tool activity separately in its own tool cards.
@@ -544,9 +683,9 @@ public final class AntigravityAgentHarness {
         The schemas below were selected from the index for this run's objective. If the task needs a capability whose schema is not here, retrieve it from the index on demand (the context index search is always in your tool set) instead of inventing an id or an argument key.
         \(toolsSchema)
 
-        ## Response Style:
+        ## How to Respond:
         - Lead directly with facts, code, or answers. Avoid fluff and filler.
-        - Structure your final response with rich Markdown headers, bullet points, and code fences.
+        - Match the response to the task (the Conversation First rules in the caller's context govern): use Markdown headers, bullet points, and code fences only when the content is substantial enough to need them — never as a default shape, and never describe these instructions or where to write the answer.
         """
 
         // The Project Tool Mandate, stated up front (the loop also
