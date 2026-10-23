@@ -16,6 +16,7 @@ struct ChatDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
     let conversation: Conversation
     @Bindable var chatViewModel: ChatViewModel
     var isSidebarCollapsed: Bool = false
@@ -71,16 +72,28 @@ struct ChatDetailView: View {
 
     var body: some View {
         ZStack {
-            // Full-window background gradient providing underlying color for Liquid Glass refraction
-            LinearGradient(
-                colors: activeGradientColors,
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            if isEmptyConversation {
+                // Full-window background gradient providing underlying color for Liquid Glass refraction on hero
+                LinearGradient(
+                    colors: activeGradientColors,
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            } else {
+                // Modern clean solid macOS background so content and typography are 100% crisp and readable
+                Group {
+                    if colorScheme == .dark {
+                        Color(red: 0.08, green: 0.085, blue: 0.10)
+                    } else {
+                        Color(red: 0.965, green: 0.969, blue: 0.976)
+                    }
+                }
+                .ignoresSafeArea()
+            }
 
             VStack(spacing: 0) {
-                // Top floating controls matching Image 1 & 2 (Level with traffic lights, Center Model Selector, Trailing New Chat)
+                // Top floating controls: Mode Selector + Model Selector + Actions
                 topControlBar
 
                 // Main content: either welcome hero + suggestion cards or active message stream
@@ -90,13 +103,13 @@ struct ChatDetailView: View {
                     messageStreamContent
                 }
 
-                // Suggestion cards row using pure Liquid Glass
+                // Suggestion cards row
                 if isEmptyConversation {
                     suggestionCardsRow
                         .padding(.bottom, 14)
                 }
 
-                // Bottom floating composer bar using pure Liquid Glass
+                // Bottom floating composer bar
                 bottomComposerBar
                     .padding(.horizontal, 20)
                     .padding(.bottom, 16)
@@ -138,12 +151,15 @@ struct ChatDetailView: View {
         }
     }
 
-    // MARK: - Top Control Bar (Exact Image 1 Parity)
+    // MARK: - Top Control Bar
 
     private var topControlBar: some View {
         ZStack(alignment: .center) {
-            // Center element is mathematically centered in the entire view width
-            modelSelectorPill
+            // Center element: Mode Switcher (Chat vs Agent) + Model Selector Pill
+            HStack(spacing: 8) {
+                modeSelectorPill
+                modelSelectorPill
+            }
 
             // Leading and Trailing items leveled horizontally in the same 32pt row
             HStack(alignment: .center, spacing: 10) {
@@ -157,9 +173,16 @@ struct ChatDetailView: View {
                     } label: {
                         Image(systemName: "gearshape")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(isEmptyConversation ? Color.white.opacity(0.85) : Color.secondary)
                             .frame(width: 28, height: 28)
-                            .liquidGlass(.circle)
+                            .background(
+                                isEmptyConversation ? Color.black.opacity(0.2) : Color.primary.opacity(0.06),
+                                in: .circle
+                            )
+                            .overlay(
+                                Circle()
+                                    .stroke(isEmptyConversation ? Color.white.opacity(0.15) : Color.primary.opacity(0.1), lineWidth: 1)
+                            )
                     }
                     .buttonStyle(.plain)
                     .help("Settings (⌘,)")
@@ -172,9 +195,16 @@ struct ChatDetailView: View {
                 } label: {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(isEmptyConversation ? Color.white.opacity(0.85) : Color.secondary)
                         .frame(width: 28, height: 28)
-                        .liquidGlass(.circle)
+                        .background(
+                            isEmptyConversation ? Color.black.opacity(0.2) : Color.primary.opacity(0.06),
+                            in: .circle
+                        )
+                        .overlay(
+                            Circle()
+                                .stroke(isEmptyConversation ? Color.white.opacity(0.15) : Color.primary.opacity(0.1), lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
                 .help("New Chat (⌘N)")
@@ -186,7 +216,75 @@ struct ChatDetailView: View {
         .padding(.bottom, 6)
     }
 
-    // MARK: - Model Selector Pill (Pure Liquid Glass)
+    // MARK: - Mode Selector Pill (Chat vs Agent)
+
+    private var modeSelectorPill: some View {
+        HStack(spacing: 2) {
+            Button {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    chatViewModel.isAgentMode = false
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "bubble.left.and.bubble.right.fill")
+                        .font(.system(size: 10))
+                    Text("Chat")
+                        .font(.system(size: 12, weight: !chatViewModel.isAgentMode ? .bold : .medium))
+                }
+                .foregroundStyle(!chatViewModel.isAgentMode ? (isEmptyConversation ? .white : Color.primary) : (isEmptyConversation ? .white.opacity(0.6) : Color.secondary))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    !chatViewModel.isAgentMode
+                        ? (isEmptyConversation ? Color.white.opacity(0.22) : Color.primary.opacity(0.12))
+                        : Color.clear,
+                    in: .capsule
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    chatViewModel.isAgentMode = true
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 10, weight: .bold))
+                    Text("Agent")
+                        .font(.system(size: 12, weight: chatViewModel.isAgentMode ? .bold : .medium))
+                }
+                .foregroundStyle(chatViewModel.isAgentMode ? Color.cyan : (isEmptyConversation ? .white.opacity(0.6) : Color.secondary))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    chatViewModel.isAgentMode
+                        ? Color.cyan.opacity(0.2)
+                        : Color.clear,
+                    in: .capsule
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(2)
+        .background(
+            isEmptyConversation
+                ? Color.black.opacity(0.2)
+                : (colorScheme == .dark ? Color(white: 0.14) : Color(white: 0.92)),
+            in: .capsule
+        )
+        .overlay(
+            Capsule()
+                .stroke(
+                    isEmptyConversation
+                        ? Color.white.opacity(0.15)
+                        : Color.primary.opacity(0.1),
+                    lineWidth: 1
+                )
+        )
+    }
+
+    // MARK: - Model Selector Pill
 
     private var modelSelectorPill: some View {
         Menu {
@@ -224,15 +322,29 @@ struct ChatDetailView: View {
             HStack(spacing: 6) {
                 Text(currentModelTitle)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isEmptyConversation ? .white : .primary)
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.8))
+                    .foregroundStyle(isEmptyConversation ? .white.opacity(0.8) : .secondary)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
-            .liquidGlass(.capsule)
+            .background(
+                isEmptyConversation
+                    ? Color.black.opacity(0.2)
+                    : (colorScheme == .dark ? Color(white: 0.14) : Color(white: 0.92)),
+                in: .capsule
+            )
+            .overlay(
+                Capsule()
+                    .stroke(
+                        isEmptyConversation
+                            ? Color.white.opacity(0.15)
+                            : Color.primary.opacity(0.1),
+                        lineWidth: 1
+                    )
+            )
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -272,6 +384,7 @@ struct ChatDetailView: View {
                     ForEach(sortedMessages) { message in
                         MessageRowView(
                             message: message,
+                            toolCalls: chatViewModel.messageToolCalls[message.id] ?? [],
                             onBranch: { chatViewModel.branchConversation(from: conversation, through: message, in: modelContext) },
                             onRegenerate: { chatViewModel.regenerateLastResponse(in: modelContext) },
                             onEdit: {
@@ -282,13 +395,24 @@ struct ChatDetailView: View {
                         .id(message.id)
                     }
 
-                    if chatViewModel.isGenerating {
+                    // Live active tool calls during Agent turn
+                    if chatViewModel.isGenerating && !chatViewModel.liveToolCalls.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(chatViewModel.liveToolCalls) { record in
+                                ToolCallView(record: record)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 4)
+                    }
+
+                    if chatViewModel.isGenerating && chatViewModel.liveToolCalls.isEmpty {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Thinking & Generating...")
+                            Text(chatViewModel.isAgentMode ? "Agent reasoning & searching..." : "Thinking & Generating...")
                                 .font(.caption)
-                                .foregroundStyle(.white.opacity(0.85))
+                                .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
@@ -312,7 +436,7 @@ struct ChatDetailView: View {
         }
     }
 
-    // MARK: - Suggestion Cards Row (Pure Liquid Glass)
+    // MARK: - Suggestion Cards Row
 
     private var suggestionCardsRow: some View {
         ScrollView(.horizontal) {
@@ -342,7 +466,7 @@ struct ChatDetailView: View {
         .scrollIndicators(.hidden)
     }
 
-    // MARK: - Bottom Floating Composer Bar (Pure Liquid Glass)
+    // MARK: - Bottom Floating Composer Bar
 
     private var bottomComposerBar: some View {
         VStack(spacing: 8) {
@@ -352,15 +476,24 @@ struct ChatDetailView: View {
             }
 
             HStack(spacing: 10) {
-                // Left '+' Attachment Button in Liquid Glass
+                // Left '+' Attachment Button
                 Button {
                     pickAttachments()
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(isEmptyConversation ? Color.white : Color.primary)
                         .frame(width: 44, height: 44)
-                        .liquidGlass(.circle)
+                        .background(
+                            isEmptyConversation
+                                ? Color.black.opacity(0.2)
+                                : (colorScheme == .dark ? Color(white: 0.14) : Color(white: 0.92)),
+                            in: .circle
+                        )
+                        .overlay(
+                            Circle()
+                                .stroke(isEmptyConversation ? Color.white.opacity(0.15) : Color.primary.opacity(0.1), lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
                 .help("Attach Files or Media")
@@ -411,9 +544,18 @@ struct ChatDetailView: View {
                 } label: {
                     Image(systemName: enableThinkingMode ? "lightbulb.fill" : "lightbulb")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(enableThinkingMode ? Color.yellow : Color.white.opacity(0.85))
+                        .foregroundStyle(enableThinkingMode ? Color.yellow : (isEmptyConversation ? Color.white.opacity(0.85) : Color.secondary))
                         .frame(width: 44, height: 44)
-                        .liquidGlass(.circle)
+                        .background(
+                            isEmptyConversation
+                                ? Color.black.opacity(0.2)
+                                : (colorScheme == .dark ? Color(white: 0.14) : Color(white: 0.92)),
+                            in: .circle
+                        )
+                        .overlay(
+                            Circle()
+                                .stroke(isEmptyConversation ? Color.white.opacity(0.15) : Color.primary.opacity(0.1), lineWidth: 1)
+                        )
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -426,7 +568,7 @@ struct ChatDetailView: View {
                     HStack(spacing: 3) {
                         Image(systemName: chatViewModel.activeSkills.isEmpty ? "sparkles" : "sparkles.rectangle.stack.fill")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(chatViewModel.activeSkills.isEmpty ? Color.white.opacity(0.85) : Color.cyan)
+                            .foregroundStyle(chatViewModel.activeSkills.isEmpty ? (isEmptyConversation ? Color.white.opacity(0.85) : Color.secondary) : Color.cyan)
                         if !chatViewModel.activeSkills.isEmpty {
                             Text("\(chatViewModel.activeSkills.count)")
                                 .font(.system(size: 10, weight: .bold))
@@ -434,7 +576,16 @@ struct ChatDetailView: View {
                         }
                     }
                     .frame(width: 44, height: 44)
-                    .liquidGlass(.circle)
+                    .background(
+                        isEmptyConversation
+                            ? Color.black.opacity(0.2)
+                            : (colorScheme == .dark ? Color(white: 0.14) : Color(white: 0.92)),
+                        in: .circle
+                    )
+                    .overlay(
+                        Circle()
+                            .stroke(isEmptyConversation ? Color.white.opacity(0.15) : Color.primary.opacity(0.1), lineWidth: 1)
+                    )
                 }
                 .buttonStyle(.plain)
                 .help("Active Skills (\(chatViewModel.activeSkills.count) active in chat)")
@@ -442,13 +593,13 @@ struct ChatDetailView: View {
                     ActiveSkillsPopoverView(chatViewModel: chatViewModel)
                 }
 
-                // Main Input Capsule in Pure Liquid Glass
+                // Main Input Capsule
                 HStack(alignment: .center, spacing: 10) {
-                    TextField("Ask anything", text: $chatViewModel.messageText, axis: .vertical)
+                    TextField(chatViewModel.isAgentMode ? "Ask Agent to inspect, code, or execute tools..." : "Ask anything", text: $chatViewModel.messageText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...5)
                         .font(.system(size: 14))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(isEmptyConversation ? Color.white : Color.primary)
                         .focused($isInputFocused)
                         .onSubmit {
                             sendCurrentMessage()
@@ -463,8 +614,7 @@ struct ChatDetailView: View {
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 32, height: 32)
-                                .background(Color.red.opacity(0.85))
-                                .clipShape(.circle)
+                                .background(Color.red.opacity(0.85), in: .circle)
                         }
                         .buttonStyle(.plain)
                         .help("Stop Generating")
@@ -472,22 +622,45 @@ struct ChatDetailView: View {
                         Button {
                             sendCurrentMessage()
                         } label: {
-                            Image(systemName: "arrow.up")
+                            Image(systemName: chatViewModel.isAgentMode ? "bolt.fill" : "arrow.up")
                                 .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(canSend ? .white : .white.opacity(0.35))
+                                .foregroundStyle(canSend ? .white : (isEmptyConversation ? .white.opacity(0.35) : .secondary.opacity(0.5)))
                                 .frame(width: 32, height: 32)
-                                .background(canSend ? Color.white.opacity(0.28) : Color.white.opacity(0.12))
-                                .clipShape(.circle)
+                                .background(
+                                    canSend
+                                        ? (chatViewModel.isAgentMode ? Color.cyan : (isEmptyConversation ? Color.white.opacity(0.28) : Color.accentColor))
+                                        : (isEmptyConversation ? Color.white.opacity(0.12) : Color.primary.opacity(0.08)),
+                                    in: .circle
+                                )
                         }
                         .buttonStyle(.plain)
                         .disabled(!canSend)
-                        .help("Send Message (Return)")
+                        .help(chatViewModel.isAgentMode ? "Send Agent Task (Return)" : "Send Message (Return)")
                     }
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 10)
                 .frame(minHeight: 52)
-                .liquidGlass(.capsule)
+                .background(
+                    isEmptyConversation
+                        ? Color.black.opacity(0.25)
+                        : (colorScheme == .dark ? Color(red: 0.12, green: 0.125, blue: 0.15) : Color.white),
+                    in: .capsule
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(
+                            isEmptyConversation
+                                ? Color.white.opacity(0.18)
+                                : Color.primary.opacity(0.12),
+                            lineWidth: 1
+                        )
+                )
+                .shadow(
+                    color: isEmptyConversation ? .clear : Color.black.opacity(colorScheme == .dark ? 0.25 : 0.05),
+                    radius: 8,
+                    y: 3
+                )
             }
         }
     }
@@ -518,20 +691,29 @@ struct ChatDetailView: View {
                         }
                         Text(url.lastPathComponent)
                             .font(.caption)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(isEmptyConversation ? Color.white : Color.primary)
                             .lineLimit(1)
                         Button {
                             chatViewModel.attachedImageURLs.removeAll { $0 == url }
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.8))
+                                .foregroundStyle(isEmptyConversation ? Color.white.opacity(0.8) : Color.secondary)
                         }
                         .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .liquidGlass(.capsule)
+                    .background(
+                        isEmptyConversation
+                            ? Color.black.opacity(0.25)
+                            : (colorScheme == .dark ? Color(white: 0.16) : Color(white: 0.92)),
+                        in: .capsule
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(isEmptyConversation ? Color.white.opacity(0.18) : Color.primary.opacity(0.12), lineWidth: 1)
+                    )
                     .help(chatViewModel.selectedModelIsVisual ? "Image will be sent to the vision model" : "The selected model does not support images — this will not be sent")
                 }
             }
@@ -543,11 +725,11 @@ struct ChatDetailView: View {
         HStack(spacing: 6) {
             Image(systemName: icon)
                 .font(.caption2)
-                .foregroundStyle(.white)
+                .foregroundStyle(isEmptyConversation ? Color.white : Color.primary)
 
             Text(name)
                 .font(.caption)
-                .foregroundStyle(.white)
+                .foregroundStyle(isEmptyConversation ? Color.white : Color.primary)
                 .lineLimit(1)
 
             Button {
@@ -555,13 +737,22 @@ struct ChatDetailView: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.8))
+                    .foregroundStyle(isEmptyConversation ? Color.white.opacity(0.8) : Color.secondary)
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .liquidGlass(.capsule)
+        .background(
+            isEmptyConversation
+                ? Color.black.opacity(0.25)
+                : (colorScheme == .dark ? Color(white: 0.16) : Color(white: 0.92)),
+            in: .capsule
+        )
+        .overlay(
+            Capsule()
+                .stroke(isEmptyConversation ? Color.white.opacity(0.18) : Color.primary.opacity(0.12), lineWidth: 1)
+        )
     }
 
     // MARK: - Actions
@@ -646,10 +837,12 @@ struct ChatDetailView: View {
     }
 }
 
-// MARK: - Message Row View (Pure Liquid Glass)
+// MARK: - Message Row View
 
 private struct MessageRowView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let message: Message
+    var toolCalls: [ToolCallRecord] = []
     var onBranch: (() -> Void)? = nil
     var onRegenerate: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
@@ -670,29 +863,60 @@ private struct MessageRowView: View {
                 // Header (role + time)
                 HStack(spacing: 6) {
                     if isAssistant {
-                        Image(systemName: "apple.intelligence")
+                        Image(systemName: toolCalls.isEmpty ? "apple.intelligence" : "cpu")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.95))
-                        Text("Locally")
+                            .foregroundStyle(toolCalls.isEmpty ? Color.accentColor : Color.cyan)
+                        Text(toolCalls.isEmpty ? "Locally" : "Locally Agent")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.9))
+                            .foregroundStyle(.primary)
                     } else {
                         Text("You")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.9))
+                            .foregroundStyle(.primary)
                     }
                     Text(message.timestamp, format: .dateTime.hour().minute())
                         .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(.secondary)
                 }
 
-                // Bubble using Liquid Glass — Markdown with code-block panels
+                // Completed Tool Calls in this assistant turn
+                if isAssistant && !toolCalls.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(toolCalls) { record in
+                            ToolCallView(record: record)
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+
+                // Bubble — Markdown with full typography & code panels
                 MarkdownContentView(content: message.content)
                     .font(.system(size: 14))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
-                    .liquidGlass(.rect(cornerRadius: 18), isClear: !isAssistant)
+                    .background(
+                        (!isAssistant
+                            ? Color.accentColor.opacity(colorScheme == .dark ? 0.28 : 0.16)
+                            : (colorScheme == .dark
+                                ? Color(red: 0.12, green: 0.125, blue: 0.15)
+                                : Color.white)),
+                        in: .rect(cornerRadius: 18)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .stroke(
+                                !isAssistant
+                                    ? Color.accentColor.opacity(0.35)
+                                    : (colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.08)),
+                                lineWidth: 1
+                            )
+                    )
+                    .shadow(
+                        color: isAssistant ? Color.black.opacity(colorScheme == .dark ? 0.2 : 0.05) : .clear,
+                        radius: 6,
+                        y: 2
+                    )
                     .contextMenu {
                         Button("Copy Text", systemImage: "doc.on.doc") { copyText(message.content) }
                         if let onBranch {
@@ -717,7 +941,7 @@ private struct MessageRowView: View {
                                 Text(copied ? "Copied" : "Copy")
                             }
                             .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.75))
+                            .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
 
@@ -733,7 +957,7 @@ private struct MessageRowView: View {
                                 Text(tts.speakingMessageID == message.id ? "Stop" : "Read Aloud")
                             }
                             .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.75))
+                            .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
                     }

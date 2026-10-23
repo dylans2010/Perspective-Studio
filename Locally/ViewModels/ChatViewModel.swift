@@ -46,6 +46,9 @@ final class ChatViewModel {
     var installedModels: [InstalledModel] = []
     var activeSkills: Set<AgentSkill> = []
     var downloadErrors: [String: String] = [:]
+    var isAgentMode: Bool = false
+    var liveToolCalls: [ToolCallRecord] = []
+    var messageToolCalls: [UUID: [ToolCallRecord]] = [:]
 
     private var generationTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
@@ -240,6 +243,13 @@ final class ChatViewModel {
         isGenerating = true
         AccessibilityNotification.Announcement("Generating response").post()
 
+        if isAgentMode {
+            generationTask = Task {
+                await generateAgentResponse(for: conversation, assistantMessage: assistantMessage, in: context)
+            }
+            return
+        }
+
         let contextLength = UserDefaults.standard.integer(forKey: "defaultContextLength")
         let effectiveContextLength = contextLength > 0 ? contextLength : 4096
 
@@ -350,9 +360,65 @@ final class ChatViewModel {
         }
     }
 
+    private func generateAgentResponse(for conversation: Conversation, assistantMessage: Message, in context: ModelContext) async {
+        liveToolCalls = []
+        let userPrompt = conversation.sortedMessages.last(where: { $0.role == .user })?.content ?? ""
+
+        let outcome = await AntigravityAgentHarness.shared.run(
+            prompt: userPrompt,
+            modelID: selectedModelID,
+            maxTurns: 10
+        ) { [weak self] event in
+            guard let self else { return }
+            switch event {
+            case .toolCallDetected(let tool, let arguments):
+                var strArgs: [String: String] = [:]
+                for (k, v) in arguments {
+                    strArgs[k] = "\(v)"
+                }
+                let record = ToolCallRecord(toolID: tool, arguments: strArgs, status: .running)
+                self.liveToolCalls.append(record)
+            case .toolExecutionFinished(let tool, let result):
+                if let index = self.liveToolCalls.lastIndex(where: { $0.toolID == tool && $0.status == .running }) {
+                    var updated = self.liveToolCalls[index]
+                    updated.status = result.success ? .completed : .failed(result.error ?? "Failed")
+                    updated.result = result.output
+                    updated.completedAt = .now
+                    self.liveToolCalls[index] = updated
+                }
+            case .tokenStreamed(let token):
+                assistantMessage.content += token
+            case .failed(let err):
+                assistantMessage.content += "\n\n[Agent Error: \(err)]"
+            default:
+                break
+            }
+        }
+
+        if assistantMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            assistantMessage.content = outcome.answer
+        }
+
+        let stepRecords: [ToolCallRecord] = outcome.steps
+            .filter { $0.kind == .toolCall || $0.kind == .toolResult }
+            .map { ToolCallRecord(agentStep: $0) }
+
+        let finalRecords = !stepRecords.isEmpty ? stepRecords : self.liveToolCalls
+        self.messageToolCalls[assistantMessage.id] = finalRecords
+        self.liveToolCalls = []
+
+        conversation.updatedAt = .now
+        try? context.save()
+        self.isGenerating = false
+    }
+
     func stopGenerating() {
         generationTask?.cancel()
         generationTask = nil
+        if isAgentMode {
+            AntigravityAgentHarness.shared.cancel()
+            liveToolCalls = []
+        }
         isGenerating = false
     }
 
