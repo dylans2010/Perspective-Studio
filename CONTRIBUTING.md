@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Locally. This project is built to
 
 1. Fork the repository
 2. Clone your fork locally
-3. Open `perspective studio.xcodeproj` in Xcode 26+
+3. Open `Locally.xcodeproj` in Xcode 26+
 4. Build and run on macOS 26+
 
 ### Requirements
@@ -19,15 +19,15 @@ Thank you for your interest in contributing to Locally. This project is built to
 
 ### Reporting Bugs
 
-Use the [Bug Report](https://github.com/Techopolis/Perspective-Studio/issues/new?template=bug_report.yml) template. Include your macOS version, Mac model, and steps to reproduce.
+Use the [Bug Report](https://github.com/dylans2010/Perspective-Studio/issues/new?template=bug_report.yml) template. Include your macOS version, Mac model, and steps to reproduce.
 
 ### Reporting Accessibility Issues
 
-Accessibility is a core priority. Use the [Accessibility Issue](https://github.com/Techopolis/Perspective-Studio/issues/new?template=accessibility.yml) template for any barriers you encounter with VoiceOver, keyboard navigation, or other assistive technologies.
+Accessibility is a core priority. Use the [Accessibility Issue](https://github.com/dylans2010/Perspective-Studio/issues/new?template=accessibility.yml) template for any barriers you encounter with VoiceOver, keyboard navigation, or other assistive technologies.
 
 ### Suggesting Features
 
-Use the [Feature Request](https://github.com/Techopolis/Perspective-Studio/issues/new?template=feature_request.yml) template. Describe the use case and how the feature would help.
+Use the [Feature Request](https://github.com/dylans2010/Perspective-Studio/issues/new?template=feature_request.yml) template. Describe the use case and how the feature would help.
 
 ### Submitting Code
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Manages automatic conversation summarization when context approaches the token limit.
-/// Adapted from the Perspective Chat CLI pattern for use with local MLX models.
+/// Adapted from a CLI chat pattern for use with local MLX models.
 struct ContextSummarizationService {
 
     // MARK: - Token Budget Constants

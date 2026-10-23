@@ -2,7 +2,7 @@ import Foundation
 
 /// Minimal versioned-JSON persistence for app-level libraries (prompts,
 /// benchmarks, knowledge bases, profiles). Files live in
-/// `Application Support/PerspectiveStudio/`; every payload is wrapped in an
+/// `Application Support/Locally/`; every payload is wrapped in an
 /// envelope with a `schemaVersion` so future migrations have a hook, instead
 /// of these stores being coupled to the SwiftData schema used for chats.
 enum JSONFileStore {
@@ -11,11 +11,23 @@ enum JSONFileStore {
         var payload: Payload
     }
 
-    nonisolated static var directory: URL {
+    nonisolated static var directory: URL { migratedDirectory }
+
+    /// The Application Support folder, computed once. If the legacy
+    /// `PerspectiveStudio` folder (from before the app was renamed Locally)
+    /// still exists and the new one doesn't, it is moved over so prompts,
+    /// benchmarks, knowledge bases, manifests, and attachments survive.
+    private nonisolated static let migratedDirectory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("PerspectiveStudio")
-    }
+        let current = base.appendingPathComponent("Locally")
+        let legacy = base.appendingPathComponent("PerspectiveStudio")
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: current.path), fm.fileExists(atPath: legacy.path) {
+            try? fm.moveItem(at: legacy, to: current)
+        }
+        return current
+    }()
 
     nonisolated static func load<Payload: Codable>(_ type: Payload.Type, filename: String) -> Payload? {
         let url = directory.appendingPathComponent(filename)
@@ -35,7 +47,7 @@ enum JSONFileStore {
             try data.write(to: directory.appendingPathComponent(filename), options: .atomic)
         } catch {
             // Persistence failures must be visible, never silently swallowed.
-            print("❌ [PerspectiveStudio] Failed to save \(filename): \(error.localizedDescription)")
+            print("❌ [Locally] Failed to save \(filename): \(error.localizedDescription)")
         }
     }
 

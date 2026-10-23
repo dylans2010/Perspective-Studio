@@ -1,13 +1,13 @@
 //
-//  perspective_studioUITestsLaunchTests.swift
-//  perspective studioUITests
+//  LocallyUITestsLaunchTests.swift
+//  LocallyUITests
 //
 //  Created by Taylor Arndt on 3/4/26.
 //
 
 import XCTest
 
-final class perspective_studioUITestsLaunchTests: XCTestCase {
+final class LocallyUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

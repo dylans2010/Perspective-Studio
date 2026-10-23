@@ -1,8 +1,10 @@
-# Perspective Studio
+# Locally
+
+> This app was formerly named **Perspective Studio**; it is now **Locally** everywhere (app bundle, menu bar, windows, and docs).
 
 ## Product Definition
 
-Perspective Studio is a free, open-source, native macOS app for experimenting with local AI models on Apple devices.
+Locally is a free, open-source, native macOS app for experimenting with local AI models on Apple devices.
 
 It should feel like a serious Apple-native answer to LM Studio: a lab for downloading, inspecting, running, and later tuning models locally, with strong accessibility and clear system-compatibility guidance.
 
@@ -10,9 +12,9 @@ Tagline: Your LLM playground on Apple devices.
 
 ## Product Strategy
 
-Perspective Studio and Intelligence serve different roles:
+Locally and Intelligence serve different roles:
 
-- Perspective Studio is the open-source experimentation product.
+- Locally is the open-source experimentation product.
 - Intelligence is the polished consumer-facing app, including Mac App Store distribution.
 - Studio features can be proven in the open-source product first, then selectively brought into Intelligence.
 - Perspective Server should evolve into the backend path for advanced Studio features.
@@ -118,7 +120,7 @@ Initial platform direction:
 
 ## Distribution
 
-- Perspective Studio: direct distribution, GitHub releases, open source
+- Locally: direct distribution, GitHub releases, open source
 - Intelligence: App Store and broader consumer distribution
 
 ## Repository Reality
@@ -163,4 +165,4 @@ I also want it to say what do you plan to use this for
 Then have a for you and based on the answers it will recomend good starter moddles also keeping in fact that the ram and computer stats
 we also should do ram calculations and things like lm studio 
 it should bee voiceover accessible as well
-Perspective Studio should launch as an open-source, advanced Apple-platform AI lab focused first on MLX model discovery, compatibility checking, downloading, and chat. Training, conversion, benchmarking, projects, and server-backed workflows matter, but they should come after the basic local experimentation loop is reliable.
+Locally should launch as an open-source, advanced Apple-platform AI lab focused first on MLX model discovery, compatibility checking, downloading, and chat. Training, conversion, benchmarking, projects, and server-backed workflows matter, but they should come after the basic local experimentation loop is reliable.

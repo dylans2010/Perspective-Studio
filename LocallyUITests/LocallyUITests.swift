@@ -1,13 +1,13 @@
 //
-//  perspective_studioUITests.swift
-//  perspective studioUITests
+//  LocallyUITests.swift
+//  LocallyUITests
 //
 //  Created by Taylor Arndt on 3/4/26.
 //
 
 import XCTest
 
-final class perspective_studioUITests: XCTestCase {
+final class LocallyUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.

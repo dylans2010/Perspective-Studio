@@ -137,7 +137,7 @@ struct MainView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .onReceive(NotificationCenter.default.publisher(for: .perspectiveQuickChat)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .locallyQuickChat)) { _ in
             openWindow(id: "quick-chat")
         }
         .onChange(of: chatViewModel.selectedConversation) {

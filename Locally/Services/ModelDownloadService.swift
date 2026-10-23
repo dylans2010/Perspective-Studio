@@ -282,7 +282,7 @@ actor ModelDownloadService {
         // Everything the @Sendable continuation closure needs is resolved here,
         // on the actor, before entering it.
         let stagingURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("perspective-download-\(UUID().uuidString)")
+            .appendingPathComponent("locally-download-\(UUID().uuidString)")
         let session = self.session
         let resumeData = (try? Data(contentsOf: resumeDataURL)).flatMap { $0.isEmpty ? nil : $0 }
         let requestURL = resumeData == nil ? resolveURL(modelID: modelID, path: file.path) : nil

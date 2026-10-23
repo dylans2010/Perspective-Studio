@@ -142,7 +142,7 @@ struct HFRepoFile: Codable, Sendable, Hashable {
 }
 
 /// The full file manifest for one model revision, persisted by the app
-/// (Application Support `…/PerspectiveStudio/manifests/<org>--<name>.json`) so
+/// (Application Support `…/Locally/manifests/<org>--<name>.json`) so
 /// completeness can be re-validated offline, byte for byte. It deliberately
 /// lives **outside** the model directory: `HubApi`'s offline validation
 /// rejects any file in that directory that has no `.metadata` record.

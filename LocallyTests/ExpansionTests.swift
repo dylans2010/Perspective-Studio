@@ -1,5 +1,5 @@
 import XCTest
-@testable import perspective_studio
+@testable import Locally
 
 /// Tests for the expansion's pure logic: download validation shape, manifest
 /// round-trip, knowledge-base chunking/retrieval, the tool expression parser,
@@ -10,10 +10,10 @@ final class ExpansionTests: XCTestCase {
     // MARK: - Download validation
 
     func testMissingModelIsNotInstalled() {
-        let result = ModelArtifactValidator.validate(modelID: "perspective-test/definitely-not-downloaded-xyz")
+        let result = ModelArtifactValidator.validate(modelID: "locally-test/definitely-not-downloaded-xyz")
         XCTAssertFalse(result.isComplete)
         XCTAssertFalse(result.issues.isEmpty)
-        XCTAssertFalse(ModelArtifactValidator.isInstalled(modelID: "perspective-test/definitely-not-downloaded-xyz"))
+        XCTAssertFalse(ModelArtifactValidator.isInstalled(modelID: "locally-test/definitely-not-downloaded-xyz"))
     }
 
     func testManifestRoundTrip() throws {

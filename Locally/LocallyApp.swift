@@ -6,7 +6,7 @@ struct LocallyApp: App {
     @State private var selectedTab: SidebarTab = .chat
     @State private var chatViewModel = ChatViewModel()
     @Environment(\.openWindow) private var openWindow
-    @NSApplicationDelegateAdaptor(PerspectiveAppDelegate.self) private var appDelegate
+    @NSApplicationDelegateAdaptor(LocallyAppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup {

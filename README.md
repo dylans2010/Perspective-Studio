@@ -27,9 +27,9 @@ Built with SwiftUI and [MLX Swift](https://github.com/ml-explore/mlx-swift-lm) b
 
 1. Clone the repository:
    ```
-   git clone https://github.com/Techopolis/Perspective-Studio.git
+   git clone https://github.com/dylans2010/Perspective-Studio.git
    ```
-2. Open `perspective studio.xcodeproj` in Xcode
+2. Open `Locally.xcodeproj` in Xcode
 3. Build and run (Cmd+R)
 4. Pick a model from the Downloads tab or use an installed model to start chatting
 

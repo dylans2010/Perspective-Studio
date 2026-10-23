@@ -1,9 +1,11 @@
-# Perspective Studio — Expansion Execution Plan
+# Locally — Expansion Execution Plan
+
+(The app was renamed from Perspective Studio to Locally; this plan predates the rename.)
 
 Base: `main` @ `c248adf` (verified live against origin, fast-forwarded 2026-10-22).
 Status: implemented on top of that base; statically verified only — see the final section.
 Project facts that shape everything below: Xcode 26 project, `PBXFileSystemSynchronizedRootGroup`
-(new Swift files under `perspective studio/` are auto-registered — no pbxproj edits),
+(new Swift files under `Locally/` are auto-registered — no pbxproj edits),
 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, macOS deployment target 15.0, Swift 6.0,
 app sandbox OFF, only package dependency is `mlx-swift-lm` (MLXLLM / MLXVLM / MLXLMCommon).
 

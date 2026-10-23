@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in Perspective Studio
+description: Report a bug in Locally
 labels: ["bug"]
 body:
   - type: markdown

@@ -4,23 +4,23 @@ import Carbon.HIToolbox
 extension Notification.Name {
     /// Posted by the global hotkey; `MainView` observes it and opens the
     /// Quick Chat window.
-    static let perspectiveQuickChat = Notification.Name("perspectiveQuickChat")
+    static let locallyQuickChat = Notification.Name("locallyQuickChat")
 }
 
 /// C-convention hotkey callback: posts a notification and nothing else.
-private func perspectiveQuickChatHotKeyHandler(
+private func locallyQuickChatHotKeyHandler(
     nextHandler: EventHandlerCallRef?,
     event: EventRef?,
     userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    NotificationCenter.default.post(name: .perspectiveQuickChat, object: nil)
+    NotificationCenter.default.post(name: .locallyQuickChat, object: nil)
     return noErr
 }
 
 /// Registers the system-wide ⇧⌘L global hotkey (feature M) while the app is
 /// running, via Carbon's `RegisterEventHotKey` — the supported way to get a
 /// global shortcut on macOS without accessibility permissions.
-final class PerspectiveAppDelegate: NSObject, NSApplicationDelegate {
+final class LocallyAppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyRef: EventHotKeyRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -39,7 +39,7 @@ final class PerspectiveAppDelegate: NSObject, NSApplicationDelegate {
         )
         InstallEventHandler(
             GetApplicationEventTarget(),
-            perspectiveQuickChatHotKeyHandler,
+            locallyQuickChatHotKeyHandler,
             1,
             &eventSpec,
             nil,
