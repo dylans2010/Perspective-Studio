@@ -40,20 +40,20 @@ public enum ConversationIntent: String, Sendable, Equatable, CaseIterable {
     public var allowsToolMachinery: Bool { self == .task }
 }
 
-public enum ConversationRouter {
+public nonisolated enum ConversationRouter {
 
     // MARK: - Public API
 
-    public nonisolated static func intent(for message: String) -> ConversationIntent {
+    public static func intent(for message: String) -> ConversationIntent {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .direct }
-        if isConversational(trimmed) { return .conversational }
+        if matchesConversationalPattern(trimmed) { return .conversational }
         if hasTaskSignal(trimmed) { return .task }
         return .direct
     }
 
     /// Convenience for call sites that only need the conversational gate.
-    public nonisolated static func isConversational(_ message: String) -> Bool {
+    public static func isConversational(_ message: String) -> Bool {
         intent(for: message) == .conversational
     }
 
@@ -64,7 +64,7 @@ public enum ConversationRouter {
     /// that `ChatViewModel` prepends to the persisted user message) are
     /// removed first — a message with an attachment is never a bare
     /// greeting.
-    nonisolated static func normalized(_ message: String) -> String {
+    static func normalized(_ message: String) -> String {
         var text = message
         // Drop attachment marker lines the view model prepends.
         let lines = text.components(separatedBy: .newlines).filter { line in
@@ -83,7 +83,7 @@ public enum ConversationRouter {
         return collapsed
     }
 
-    nonisolated static func isConversational(_ message: String) -> Bool {
+    static func matchesConversationalPattern(_ message: String) -> Bool {
         let text = normalized(message)
         guard !text.isEmpty, text.count <= 60 else { return false }
         // A question about something, or any clause beyond the social
