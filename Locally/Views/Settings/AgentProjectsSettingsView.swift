@@ -14,6 +14,10 @@ struct AgentProjectsSettingsView: View {
     @State private var draftName: String = ""
     @State private var draftNotes: String = ""
     @State private var draftInstructions: String = ""
+    @State private var draftBuildCommand: String = ""
+    @State private var draftTestCommand: String = ""
+    @State private var draftPinnedFiles: [String] = []
+    @State private var draftRequireToolUse: Bool = true
     @State private var newMemoryText: String = ""
     @State private var newMemoryKind: AgentProjectMemoryEntry.Kind = .fact
 
@@ -87,6 +91,14 @@ struct AgentProjectsSettingsView: View {
                         .foregroundStyle(project.folderExists ? Color.secondary : Color.red)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    Text(AgentProjectSnapshot.summaryLine(for: project))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    if project.requireToolUse {
+                        Text("Agent must use tools in this project")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.cyan)
+                    }
                     if !project.folderExists {
                         Text("This folder no longer exists — re-point the project or remove it.")
                             .font(.system(size: 11))
@@ -187,6 +199,71 @@ struct AgentProjectsSettingsView: View {
                     .background(Color(.controlBackgroundColor))
                     .clipShape(.rect(cornerRadius: 8))
             }
+
+            // Agent behavior in this project.
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Always require tool use in this project", isOn: $draftRequireToolUse)
+                    .font(.system(size: 12, weight: .semibold))
+                Text("While on, an Agent run in this project cannot finish on a tool-less answer — the model must explore and ground its work in tool results from the run. Turn it off only for purely conversational projects.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                LabeledContent("Build command") {
+                    TextField("e.g. xcodebuild -scheme App build", text: $draftBuildCommand)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+                LabeledContent("Test command") {
+                    TextField("e.g. swift test", text: $draftTestCommand)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+                Text("Commands are given to the agent as this project's way to verify work — it runs them from the project folder.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            // Pinned files — contents injected into every run.
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Pinned Files")
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Button("Pin File…") { pinFile(for: project) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                Text("A pinned file's contents go into the agent's context on every run in this project — pin the README, the architecture notes, the file the agent always gets wrong.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                if draftPinnedFiles.isEmpty {
+                    Text("No pinned files.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                } else {
+                    ForEach(draftPinnedFiles, id: \.self) { relativePath in
+                        HStack(spacing: 6) {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.cyan)
+                            Text(relativePath)
+                                .font(.system(size: 11, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Button {
+                                draftPinnedFiles.removeAll { $0 == relativePath }
+                            } label {
+                                Image(systemName: "xmark.circle")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Unpin \(relativePath)")
+                        }
+                    }
+                }
+            }
+
             HStack {
                 Spacer()
                 Button("Save Changes") {
@@ -317,6 +394,10 @@ struct AgentProjectsSettingsView: View {
         draftName = project.name
         draftNotes = project.notes
         draftInstructions = project.instructions
+        draftBuildCommand = project.buildCommand
+        draftTestCommand = project.testCommand
+        draftPinnedFiles = project.pinnedFilePaths
+        draftRequireToolUse = project.requireToolUse
     }
 
     private func saveDraft(to project: AgentProject) {
@@ -325,6 +406,10 @@ struct AgentProjectsSettingsView: View {
         if !name.isEmpty { updated.name = name }
         updated.notes = draftNotes
         updated.instructions = draftInstructions
+        updated.buildCommand = draftBuildCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.testCommand = draftTestCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.pinnedFilePaths = draftPinnedFiles
+        updated.requireToolUse = draftRequireToolUse
         store.updateProject(updated)
     }
 
@@ -353,6 +438,30 @@ struct AgentProjectsSettingsView: View {
             var updated = project
             updated.rootPath = url.standardizedFileURL.path
             store.updateProject(updated)
+        }
+    }
+
+    /// Pins files into the draft: paths are stored relative to the
+    /// project root when the file lives inside it (so the project stays
+    /// portable if the folder moves), absolute otherwise.
+    private func pinFile(for project: AgentProject) {
+        let panel = NSOpenPanel()
+        panel.title = "Pin Files for \(project.name)"
+        panel.prompt = "Pin"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = project.rootURL
+        guard panel.runModal() == .OK else { return }
+        let rootPath = project.rootURL.standardizedFileURL.path
+        for url in panel.urls {
+            let path = url.standardizedFileURL.path
+            let relative = path.hasPrefix(rootPath + "/")
+                ? String(path.dropFirst(rootPath.count + 1))
+                : path
+            if !draftPinnedFiles.contains(relative) {
+                draftPinnedFiles.append(relative)
+            }
         }
     }
 

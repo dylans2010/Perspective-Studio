@@ -158,6 +158,46 @@ public final class AgentProjectsStore {
             lines.append("Standing instructions for this project (follow them):\n\(instructions)")
         }
 
+        // Orientation snapshot — kind, layout, branch, README — so the
+        // first tool call can go at the task instead of rediscovering
+        // the project's shape.
+        let snapshot = AgentProjectSnapshot.contextBlock(for: project)
+        if !snapshot.isEmpty {
+            lines.append(snapshot)
+        }
+
+        // The project's own commands, when the user set them: verify
+        // the way this project verifies.
+        let buildCommand = project.buildCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        let testCommand = project.testCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !buildCommand.isEmpty || !testCommand.isEmpty {
+            var commandLines = ["Project commands (run these from the project folder when you need to verify your work):"]
+            if !buildCommand.isEmpty { commandLines.append("- Build: \(buildCommand)") }
+            if !testCommand.isEmpty { commandLines.append("- Test: \(testCommand)") }
+            lines.append(commandLines.joined(separator: "\n"))
+        }
+
+        // Pinned files: the documents the user wants in front of the
+        // agent on every run in this project.
+        if !project.pinnedFilePaths.isEmpty {
+            var pinnedLines = ["Pinned files — the user pinned these into every run in this project. Treat them as primary context:"]
+            for relativePath in project.pinnedFilePaths {
+                if let contents = AgentProjectSnapshot.pinnedFileContents(root: project.rootURL, relativePath: relativePath) {
+                    pinnedLines.append("--- \(relativePath) ---\n\(contents)")
+                } else {
+                    pinnedLines.append("--- \(relativePath) --- (pinned, but the file could not be read — mention that if it matters)")
+                }
+            }
+            lines.append(pinnedLines.joined(separator: "\n"))
+        }
+
+        // The Project Tool Mandate, in the context block as well as the
+        // harness prompt, so every Agent path (MLX loop, Apple-model
+        // runner) carries it.
+        if project.requireToolUse {
+            lines.append("TOOL MANDATE for this project: you must ALWAYS use/call tools when working in this project — no exceptions. Your first action must be a tool call that explores the project, and every claim about the project must be grounded in a tool result from this run. The runtime rejects a final answer given before any tool has run.")
+        }
+
         let memory = project.memoryNewestFirst.prefix(memoryLimit)
         if memory.isEmpty {
             lines.append("Project memory: empty so far. When you learn a durable fact about this project (a decision, a convention, a gotcha, where things live), record it with the project memory tool so future sessions start from it.")

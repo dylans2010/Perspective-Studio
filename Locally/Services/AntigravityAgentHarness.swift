@@ -95,17 +95,24 @@ public struct AgentExecutionOutcome: Sendable {
     public let steps: [AgentStep]
     public let success: Bool
     public let error: String?
+    /// The model's reasoning across the run, split out of its turns by
+    /// `AntigravityLoopEngine.splitThinking`. Callers re-attach it to the
+    /// persisted message inside `<thinking>` tags so the message row
+    /// renders it in `ThinkingModelUI` — as thinking, never as answer.
+    public let thinking: String?
 
     public init(
         answer: String,
         steps: [AgentStep],
         success: Bool,
-        error: String? = nil
+        error: String? = nil,
+        thinking: String? = nil
     ) {
         self.answer = answer
         self.steps = steps
         self.success = success
         self.error = error
+        self.thinking = thinking
     }
 }
 
@@ -192,6 +199,27 @@ public final class AntigravityAgentHarness {
 
         let selectedBackend = backend ?? InferenceBackends.default
 
+        // 0. Verify the bundled Antigravity SDK before anything else.
+        // Agent mode runs on this SDK's loop in EVERY configuration (the
+        // MLX text-protocol loop below and the Apple model's native loop),
+        // so its state is established up front, shown in the run trace,
+        // and injected into the system prompt — the model can always use
+        // the loop, and can never be left believing it is (or isn't)
+        // there. A missing/unverifiable bundle does not block the run:
+        // the loop engine is native Swift, and the trace + prompt say
+        // plainly that the bundled SDK reported a problem.
+        let sdkStatus = AntigravitySDKBundle.status()
+        addStep(AgentStep(
+            kind: .thought,
+            title: sdkStatus.isUsable ? "Agent Engine Ready" : "Agent Engine Warning",
+            detail: sdkStatus.summary + (sdkStatus.issues.isEmpty ? "" : "\n" + sdkStatus.issues.joined(separator: "\n"))
+        ))
+
+        // The active project (if any) and its tool-use requirement, which
+        // gate final answers below via AgentToolPolicy.
+        let activeProject = projectID.flatMap { AgentProjectsStore.shared.project(id: $0) }
+        let requireProjectTools = activeProject?.requireToolUse ?? true
+
         // The built-in Apple model exposes native tool calling, so it runs
         // through its own loop instead of the TOOL_CALL text protocol below.
         if #available(macOS 26.0, *), selectedBackend.backendID == AppleFoundationModel.backendID {
@@ -251,7 +279,13 @@ public final class AntigravityAgentHarness {
             sessionExecutionMode: .autopilot
         )
 
-        let systemPrompt = buildSystemPrompt(context: assistContext, additionalSystemPrompt: additionalSystemPrompt)
+        let systemPrompt = buildSystemPrompt(
+            context: assistContext,
+            sdkStatus: sdkStatus,
+            projectName: activeProject?.name,
+            requireProjectTools: requireProjectTools,
+            additionalSystemPrompt: additionalSystemPrompt
+        )
 
         // Initial goal step
         addStep(AgentStep(
@@ -266,6 +300,14 @@ public final class AntigravityAgentHarness {
 
         var finalAnswer: String = ""
         var turnCount = 0
+        /// Tools actually executed this run — the Project mandate's
+        /// counter (`AgentToolPolicy`).
+        var toolCallsExecuted = 0
+        /// Times the loop has already sent the model back to use a tool.
+        var projectToolRejections = 0
+        /// Reasoning split out of the model's turns, in order. Surfaced
+        /// as thought steps and on the outcome — never inside the answer.
+        var accumulatedThinking: [String] = []
 
         // 3. Multi-turn Agent Loop
         while turnCount < maxTurns && !Task.isCancelled {
@@ -302,11 +344,21 @@ public final class AntigravityAgentHarness {
                 return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
             }
 
+            // This turn's reasoning, split out before classification: it
+            // belongs in a thought step (and the outcome's thinking), not
+            // in any answer text, whichever way the turn classifies.
+            let turnThinking = AntigravityLoopEngine.splitThinking(from: turnResponse).thinking
+            if let turnThinking, !turnThinking.isEmpty {
+                accumulatedThinking.append(turnThinking)
+                addStep(AgentStep(kind: .thought, title: "Thinking", detail: turnThinking))
+            }
+
             // 4. Classify the turn with the loop engine. Tool turns are
             // consumed entirely by the loop: their text (which contains the
             // raw invocation) is never forwarded to the chat as a message.
             switch AntigravityLoopEngine.decide(turnText: turnResponse, knownToolIDs: ToolsRegistry.shared.allToolIDs) {
             case .callTool(let toolId, let codableArgs):
+                toolCallsExecuted += 1
                 let args = codableArgs.mapValues { $0.anyValue }
 
                 self.activeToolName = toolId
@@ -360,8 +412,36 @@ public final class AntigravityAgentHarness {
 
                 self.activeToolName = nil
             case .finalAnswer(let answer):
-                // Model provided final synthesized answer (or direct response)
-                finalAnswer = answer
+                // The answer text with its reasoning removed — the
+                // reasoning was already captured as a thought step above,
+                // and it must not ride along inside the answer.
+                let cleanAnswer = AntigravityLoopEngine.splitThinking(from: answer).answer
+
+                // Project Tool Mandate: with a project active, a final
+                // answer is only acceptable after the agent has actually
+                // used its tools in the project. A tool-less answer is
+                // rejected and the model is sent back to explore first.
+                if AgentToolPolicy.mustRejectFinalAnswer(
+                    toolCallsExecuted: toolCallsExecuted,
+                    projectActive: activeProject != nil,
+                    requireToolUse: requireProjectTools,
+                    rejectionsUsed: projectToolRejections
+                ), let project = activeProject {
+                    projectToolRejections += 1
+                    addStep(AgentStep(
+                        kind: .thought,
+                        title: "Project Tool Mandate",
+                        detail: "The model tried to answer about \"\(project.name)\" without using any tools. The answer was rejected — in a project, work must be grounded in tool results from this run."
+                    ))
+                    conversationTurns.append(Turn(role: "assistant", content: "[Draft answer withheld — no tools used yet]"))
+                    conversationTurns.append(Turn(
+                        role: "user",
+                        content: AgentToolPolicy.rejectionPrompt(projectName: project.name)
+                    ))
+                    continue
+                }
+
+                finalAnswer = cleanAnswer
                 let finalStep = AgentStep(
                     kind: .finalAnswer,
                     title: "Final Answer",
@@ -370,33 +450,65 @@ public final class AntigravityAgentHarness {
                 addStep(finalStep)
                 dispatchStatus(.finished)
                 onEvent?(.completed(answer: finalAnswer, steps: steps))
-                return AgentExecutionOutcome(answer: finalAnswer, steps: steps, success: true)
+                return AgentExecutionOutcome(
+                    answer: finalAnswer,
+                    steps: steps,
+                    success: true,
+                    thinking: accumulatedThinking.isEmpty ? nil : accumulatedThinking.joined(separator: "\n\n")
+                )
             }
         }
 
         // Loop concluded without direct answer
         if finalAnswer.isEmpty {
             let lastThought = AntigravityLoopEngine.cleanFinalAnswer(currentThought, knownToolIDs: ToolsRegistry.shared.allToolIDs)
-            finalAnswer = lastThought.isEmpty ? "Agent completed \(turnCount) turns." : lastThought
+            let split = AntigravityLoopEngine.splitThinking(from: lastThought)
+            if let thinking = split.thinking, !accumulatedThinking.contains(thinking) {
+                accumulatedThinking.append(thinking)
+            }
+            finalAnswer = split.answer.isEmpty ? "Agent completed \(turnCount) turns." : split.answer
             addStep(AgentStep(kind: .finalAnswer, title: "Synthesized Output", detail: finalAnswer))
         }
 
         dispatchStatus(.finished)
         onEvent?(.completed(answer: finalAnswer, steps: steps))
-        return AgentExecutionOutcome(answer: finalAnswer, steps: steps, success: true)
+        return AgentExecutionOutcome(
+            answer: finalAnswer,
+            steps: steps,
+            success: true,
+            thinking: accumulatedThinking.isEmpty ? nil : accumulatedThinking.joined(separator: "\n\n")
+        )
     }
 
     // MARK: - Prompt Construction
 
-    private func buildSystemPrompt(context: AssistContext, additionalSystemPrompt: String? = nil) -> String {
+    private func buildSystemPrompt(
+        context: AssistContext,
+        sdkStatus: AntigravitySDKBundle.Status,
+        projectName: String?,
+        requireProjectTools: Bool,
+        additionalSystemPrompt: String? = nil
+    ) -> String {
         let assetsIndex = SystemAssetsManager.shared.generatePromptIndex()
         let toolsSchema = ToolsRegistry.shared.schemaDescriptions()
+
+        // Computer Use state, stated plainly so the model uses the suite
+        // when it is on and explains (instead of attempting) when it is
+        // off. The full computer_* schemas are already inside
+        // `toolsSchema` — this line is what connects them to the SDK loop
+        // the model is running in.
+        let computerUseLine = ComputerUseSettings.isEnabled
+            ? "Computer Use is ON: this Mac's screen and apps are available to you through the desktop tools in your tool list (screenshots, screen text, accessibility, mouse, keyboard, windows). Work observe → act → verify: look at the screen first, do one action, then verify the result before continuing."
+            : "Computer Use is OFF (Settings → Computer Use). The desktop tools will decline to act; if a task needs the screen or another app, tell the user it needs Computer Use turned on instead of attempting it."
 
         var prompt = """
         # Antigravity Agent Runtime
 
         You are an autonomous AI agent running locally and privately on macOS via Locally.
         Your goal is to solve the user's objective thoroughly, safely, and concisely using the tools provided.
+
+        \(AntigravitySDKBundle.agentModeContextLine(status: sdkStatus))
+        \(computerUseLine)
 
         ## Core Operational Guidelines:
         1. When a task requires external data, system verification, or computation, use the available tools.
@@ -420,6 +532,12 @@ public final class AntigravityAgentHarness {
         - Lead directly with facts, code, or answers. Avoid fluff and filler.
         - Structure your final response with rich Markdown headers, bullet points, and code fences.
         """
+
+        // The Project Tool Mandate, stated up front (the loop also
+        // enforces it — see AgentToolPolicy).
+        if let projectName, requireProjectTools {
+            prompt += "\n\n" + AgentToolPolicy.projectMandate(projectName: projectName)
+        }
 
         // The caller's context — custom system prompts, skills, and the
         // <thinking> format instruction assembled by ModelContextBuilder.

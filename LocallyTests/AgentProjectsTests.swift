@@ -89,4 +89,73 @@ final class AgentProjectsTests: XCTestCase {
         XCTAssertNil(store.project(id: project.id))
         XCTAssertNil(store.selectedProjectID)
     }
+
+    /// Projects saved before the pinned-files / commands / mandate fields
+    /// existed must decode with defaults — never be silently dropped.
+    func testLegacyProjectJSONDecodesWithDefaults() throws {
+        let legacy = """
+        {"id":"\(UUID().uuidString)","name":"Old","rootPath":"/tmp/old","notes":"","instructions":"","memory":[],"createdAt":0,"updatedAt":0}
+        """
+        // Dates encode as seconds since 2001 in the default strategy the
+        // store round-trips with; decode with the matching default.
+        let decoded = try JSONDecoder().decode(AgentProject.self, from: Data(legacy.utf8))
+        XCTAssertEqual(decoded.name, "Old")
+        XCTAssertEqual(decoded.pinnedFilePaths, [])
+        XCTAssertEqual(decoded.buildCommand, "")
+        XCTAssertEqual(decoded.testCommand, "")
+        XCTAssertTrue(decoded.requireToolUse)
+    }
+
+    func testNewFieldsRoundTrip() throws {
+        var project = sampleProject()
+        project.pinnedFilePaths = ["README.md", "docs/arch.md"]
+        project.buildCommand = "swift build"
+        project.testCommand = "swift test"
+        project.requireToolUse = false
+        let data = try JSONEncoder().encode(project)
+        let decoded = try JSONDecoder().decode(AgentProject.self, from: data)
+        XCTAssertEqual(decoded, project)
+    }
+
+    @MainActor
+    func testContextBlockCarriesMandateCommandsAndPinnedFiles() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-project-context-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try "# Pinned Doc\nKey facts live here.".write(
+            to: folder.appendingPathComponent("PINNED.md"), atomically: true, encoding: .utf8
+        )
+        try "Package.swift".write(
+            to: folder.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8
+        )
+
+        var project = AgentProject(name: "Ctx", rootPath: folder.path)
+        project.pinnedFilePaths = ["PINNED.md"]
+        project.buildCommand = "swift build"
+        project.testCommand = "swift test"
+
+        let block = AgentProjectsStore.shared.contextBlock(for: project)
+        XCTAssertTrue(block.contains("TOOL MANDATE"), block)
+        XCTAssertTrue(block.contains("Build: swift build"), block)
+        XCTAssertTrue(block.contains("Test: swift test"), block)
+        XCTAssertTrue(block.contains("Key facts live here."), block)
+        XCTAssertTrue(block.contains("Swift Package"), block)
+    }
+
+    func testSnapshotDetectsKindsAndGitBranch() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-project-snapshot-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try "// swift".write(to: folder.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let gitDir = folder.appendingPathComponent(".git")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        try "ref: refs/heads/feature/work\n".write(to: gitDir.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+
+        let project = AgentProject(name: "Snap", rootPath: folder.path)
+        XCTAssertEqual(AgentProjectSnapshot.detectKind(root: folder).label, "Swift Package")
+        XCTAssertEqual(AgentProjectSnapshot.gitBranch(root: folder), "feature/work")
+        XCTAssertTrue(AgentProjectSnapshot.summaryLine(for: project).contains("Swift Package"))
+    }
 }

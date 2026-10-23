@@ -59,6 +59,22 @@ public struct AgentProject: Identifiable, Codable, Sendable, Equatable {
     public var memory: [AgentProjectMemoryEntry]
     public var createdAt: Date
     public var updatedAt: Date
+    /// Files (paths relative to the project root) whose contents are
+    /// injected into every Agent run in this project — the project's
+    /// key documents the agent should always have in front of it.
+    public var pinnedFilePaths: [String] = []
+    /// The project's build command, when the user has set one. Injected
+    /// into the run context so the agent verifies the way the project
+    /// itself does instead of guessing a command.
+    public var buildCommand: String = ""
+    /// The project's test command, companion to `buildCommand`.
+    public var testCommand: String = ""
+    /// The Project Tool Mandate switch: while true (the default), an
+    /// Agent run in this project may not finish without having used its
+    /// tools — the loop rejects tool-less final answers
+    /// (`AgentToolPolicy`). Users can turn it off per project for
+    /// purely conversational projects.
+    public var requireToolUse: Bool = true
 
     public init(
         id: UUID = UUID(),
@@ -68,7 +84,11 @@ public struct AgentProject: Identifiable, Codable, Sendable, Equatable {
         instructions: String = "",
         memory: [AgentProjectMemoryEntry] = [],
         createdAt: Date = .now,
-        updatedAt: Date = .now
+        updatedAt: Date = .now,
+        pinnedFilePaths: [String] = [],
+        buildCommand: String = "",
+        testCommand: String = "",
+        requireToolUse: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -78,6 +98,34 @@ public struct AgentProject: Identifiable, Codable, Sendable, Equatable {
         self.memory = memory
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.pinnedFilePaths = pinnedFilePaths
+        self.buildCommand = buildCommand
+        self.testCommand = testCommand
+        self.requireToolUse = requireToolUse
+    }
+
+    // Projects persisted before the pinned-files / commands / mandate
+    // fields existed must still decode — a synthesized decoder would
+    // throw on the missing keys and silently drop the user's projects.
+    private enum CodingKeys: String, CodingKey {
+        case id, name, rootPath, notes, instructions, memory, createdAt, updatedAt
+        case pinnedFilePaths, buildCommand, testCommand, requireToolUse
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        rootPath = try container.decode(String.self, forKey: .rootPath)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        instructions = try container.decodeIfPresent(String.self, forKey: .instructions) ?? ""
+        memory = try container.decodeIfPresent([AgentProjectMemoryEntry].self, forKey: .memory) ?? []
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now
+        pinnedFilePaths = try container.decodeIfPresent([String].self, forKey: .pinnedFilePaths) ?? []
+        buildCommand = try container.decodeIfPresent(String.self, forKey: .buildCommand) ?? ""
+        testCommand = try container.decodeIfPresent(String.self, forKey: .testCommand) ?? ""
+        requireToolUse = try container.decodeIfPresent(Bool.self, forKey: .requireToolUse) ?? true
     }
 
     public var rootURL: URL { URL(fileURLWithPath: rootPath) }
