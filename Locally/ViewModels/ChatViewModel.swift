@@ -398,8 +398,8 @@ final class ChatViewModel {
                         systemAssetsIndex: SystemAssetsManager.shared.generatePromptIndex(),
                         availableSkills: SkillsManager.shared.skills,
                         activeSkills: Array(activeSkills),
-                        thinkingEnabled: UserDefaults.standard.bool(forKey: "enableThinkingMode"),
-                        thinkingBudget: UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium",
+                        thinkingEnabled: ThinkingSettings.isEnabled,
+                        thinkingBudget: ThinkingSettings.budget,
                         knowledgeContext: knowledge,
                         modelDisplayName: displayName(for: selectedModelID)
                     )
@@ -505,8 +505,8 @@ final class ChatViewModel {
                 includeSystemAssets: false,
                 availableSkills: SkillsManager.shared.skills,
                 activeSkills: Array(activeSkills),
-                thinkingEnabled: UserDefaults.standard.bool(forKey: "enableThinkingMode"),
-                thinkingBudget: UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium",
+                thinkingEnabled: ThinkingSettings.isEnabled,
+                thinkingBudget: ThinkingSettings.budget,
                 modelDisplayName: displayName(for: selectedModelID),
                 projectContext: projectContext
             )
@@ -557,10 +557,15 @@ final class ChatViewModel {
         // loop engine); sanitize once more here so no path can persist a
         // raw invocation or tool id into the saved conversation.
         let sanitizedAnswer = ToolInvocationSanitizer.displayText(for: outcome.answer, knownToolIDs: knownToolIDs)
+        // The run's reasoning is persisted back inside <thinking> tags —
+        // the same storage form Chat mode uses — so the message row splits
+        // it into ThinkingModelUI instead of the answer bubble. (The
+        // session note below keeps using the answer alone.)
+        let thinkingPrefix = outcome.thinking.map { "<thinking>\n\($0)\n</thinking>\n\n" } ?? ""
         if !sanitizedAnswer.isEmpty {
-            assistantMessage.content = sanitizedAnswer
+            assistantMessage.content = thinkingPrefix + sanitizedAnswer
         } else if assistantMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            assistantMessage.content = sanitizedAnswer
+            assistantMessage.content = thinkingPrefix + sanitizedAnswer
         }
 
         // Per-project memory: every run in a project leaves a session note

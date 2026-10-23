@@ -110,8 +110,8 @@ struct QuickChatView: View {
                 systemAssetsIndex: SystemAssetsManager.shared.generatePromptIndex(),
                 availableSkills: SkillsManager.shared.skills,
                 activeSkills: Array(chatViewModel.activeSkills),
-                thinkingEnabled: UserDefaults.standard.bool(forKey: "enableThinkingMode"),
-                thinkingBudget: UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium",
+                thinkingEnabled: ThinkingSettings.isEnabled,
+                thinkingBudget: ThinkingSettings.budget,
                 modelDisplayName: model.displayName
             )
         )

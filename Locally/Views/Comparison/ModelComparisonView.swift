@@ -316,12 +316,23 @@ struct ModelComparisonView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     if let res = result, !res.response.isEmpty {
-                        Text(res.response)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white)
-                            .textSelection(.enabled)
-                            .lineSpacing(3)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                        // Reasoning goes in the thinking UI; the column
+                        // shows the answer only (same split as chat).
+                        let parsed = ThinkingContentParser.parse(res.response)
+                        if parsed.hasThinking {
+                            ThinkingModelUI(
+                                thinkingText: parsed.thinkingText,
+                                isStreaming: res.status == .generating && parsed.isThinkingOpen
+                            )
+                        }
+                        if !parsed.answer.isEmpty {
+                            Text(parsed.answer)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.white)
+                                .textSelection(.enabled)
+                                .lineSpacing(3)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
                     } else if result?.status == .generating || result?.status == .loading {
                         HStack(spacing: 8) {
                             ProgressView()

@@ -35,10 +35,23 @@ struct MessageBubbleView: View {
                     .accessibilityHidden(true)
             }
 
-            // Content
-            Text(message.content)
-                .font(.body)
-                .textSelection(.enabled)
+            // Content — assistant reasoning renders in the thinking UI,
+            // never as answer text (same split as the main chat rows).
+            if message.role == .assistant {
+                let parsed = ThinkingContentParser.parse(message.content)
+                if parsed.hasThinking {
+                    ThinkingModelUI(thinkingText: parsed.thinkingText)
+                }
+                if !parsed.answer.isEmpty {
+                    Text(parsed.answer)
+                        .font(.body)
+                        .textSelection(.enabled)
+                }
+            } else {
+                Text(message.content)
+                    .font(.body)
+                    .textSelection(.enabled)
+            }
 
             // Action buttons for assistant messages
             if message.role == .assistant && !message.content.isEmpty {

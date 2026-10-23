@@ -34,7 +34,7 @@ enum ThinkingContentParser {
 
     nonisolated static func parse(_ raw: String) -> ParsedContent {
         var result = ParsedContent()
-        var remaining = raw[raw.startIndex...]
+        var remaining = normalizeHarmonyChannels(raw)[...]
 
         while !remaining.isEmpty {
             // Find the earliest opening tag of either spelling.
@@ -45,6 +45,30 @@ enum ThinkingContentParser {
                         earliest = (range, pair.close)
                     }
                 }
+            }
+
+            // Unmatched closing tag: several reasoning templates (DeepSeek
+            // R1, QwQ, …) pre-fill the opening <think> tag into the prompt,
+            // so the model's output STARTS mid-reasoning and the first tag
+            // it ever emits is the closing one. Everything before that
+            // close is reasoning, not answer — without this case the whole
+            // chain-of-thought renders as the reply.
+            var earliestClose: Range<Substring.Index>?
+            for pair in tagPairs {
+                if let range = remaining.range(of: pair.close, options: .caseInsensitive) {
+                    if earliestClose == nil || range.lowerBound < earliestClose!.lowerBound {
+                        earliestClose = range
+                    }
+                }
+            }
+            if let close = earliestClose, earliest == nil || close.lowerBound < earliest!.range.lowerBound {
+                let block = remaining[..<close.lowerBound]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !block.isEmpty {
+                    result.thinkingBlocks.append(block)
+                }
+                remaining = remaining[close.upperBound...]
+                continue
             }
 
             guard let opening = earliest else {
@@ -77,6 +101,21 @@ enum ThinkingContentParser {
 
         result.answer = result.answer.trimmingCharacters(in: .whitespacesAndNewlines)
         return result
+    }
+
+    /// Harmony-format models (gpt-oss) delimit reasoning with channel
+    /// markers instead of tags: `<|channel|>analysis<|channel|>` opens the
+    /// reasoning channel and `<|channel|>final<|channel|>` closes it into
+    /// the answer. Translate those markers to the tag spelling the rest of
+    /// the parser (and the history stripper) already understands, and drop
+    /// the format's bare `<|end|>` message terminators.
+    nonisolated static func normalizeHarmonyChannels(_ raw: String) -> String {
+        guard raw.contains("<|channel|>") else { return raw }
+        var normalized = raw
+        normalized = normalized.replacing("<|channel|>analysis<|channel|>", with: "<thinking>")
+        normalized = normalized.replacing("<|channel|>final<|channel|>", with: "</thinking>")
+        normalized = normalized.replacing("<|end|>", with: "")
+        return normalized
     }
 
     /// The user-visible part of a response (thinking blocks removed).

@@ -55,4 +55,27 @@ final class ThinkingContentParserTests: XCTestCase {
         XCTAssertTrue(ThinkingContentParser.containsThinkingTags("a <thinking> b"))
         XCTAssertFalse(ThinkingContentParser.containsThinkingTags("plain text"))
     }
+
+    /// Reasoning templates that pre-fill the opening tag emit output that
+    /// starts mid-thought: the first tag present is the closing one.
+    /// Everything before it is reasoning, not answer.
+    func testClosingTagOnlyIsLeadingThinking() {
+        let parsed = ThinkingContentParser.parse("Let me reason first.</think>The answer is 42.")
+        XCTAssertEqual(parsed.thinkingBlocks, ["Let me reason first."])
+        XCTAssertEqual(parsed.answer, "The answer is 42.")
+    }
+
+    func testClosingThinkingTagOnlyVariant() {
+        let parsed = ThinkingContentParser.parse("Reasoning here.</thinking>Answer here.")
+        XCTAssertEqual(parsed.thinkingBlocks, ["Reasoning here."])
+        XCTAssertEqual(parsed.answer, "Answer here.")
+    }
+
+    /// Harmony-format models delimit reasoning with channel markers.
+    func testHarmonyAnalysisChannelIsThinking() {
+        let raw = "<|channel|>analysis<|channel|>Working it out.<|channel|>final<|channel|>Done.<|end|>"
+        let parsed = ThinkingContentParser.parse(raw)
+        XCTAssertEqual(parsed.thinkingBlocks, ["Working it out."])
+        XCTAssertEqual(parsed.answer, "Done.")
+    }
 }

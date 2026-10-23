@@ -68,6 +68,16 @@ public enum AntigravityLoopEngine {
         """
     }
 
+    /// Splits a model turn into its reasoning and its answer using the
+    /// same parser the chat UI renders with (`ThinkingContentParser`).
+    /// Agent turns need this as much as chat turns do: a reasoning model's
+    /// `<thinking>` block must surface as a *thought* step (rendered by
+    /// the thinking UI), never as part of the final answer text.
+    public nonisolated static func splitThinking(from text: String) -> (thinking: String?, answer: String) {
+        let parsed = ThinkingContentParser.parse(text)
+        return (parsed.hasThinking ? parsed.thinkingText : nil, parsed.answer)
+    }
+
     /// Cleans a model's final answer for display: strips an `Assistant:`
     /// prefix, removes any tool invocations the model echoed, and redacts
     /// raw tool identifiers.
