@@ -106,6 +106,7 @@ actor LLMService {
     func generate(
         messages: [(role: String, content: String)],
         videoURLs: [URL] = [],
+        imageURLs: [URL] = [],
         systemPrompt: String? = nil,
         temperature: Double? = nil
     ) throws -> AsyncStream<String> {
@@ -124,11 +125,14 @@ actor LLMService {
         // Only send the last user message — ChatSession tracks history internally
         let lastUserMessage = messages.last(where: { $0.role == "user" })?.content ?? ""
         let videos: [UserInput.Video] = videoURLs.map { .url($0) }
+        // Images reach the engine only on this path, and callers gate it on
+        // the loaded model actually being a vision model.
+        let images: [UserInput.Image] = imageURLs.map { .url($0) }
 
         return AsyncStream { continuation in
             Task {
                 do {
-                    let stream = session.streamResponse(to: lastUserMessage, images: [], videos: videos)
+                    let stream = session.streamResponse(to: lastUserMessage, images: images, videos: videos)
                     for try await token in stream {
                         if self.isCancelled { break }
                         continuation.yield(token)
@@ -185,6 +189,7 @@ actor LLMService {
     func generate(
         messages: [(role: String, content: String)],
         videoURLs: [URL] = [],
+        imageURLs: [URL] = [],
         systemPrompt: String? = nil,
         temperature: Double? = nil
     ) throws -> AsyncStream<String> {

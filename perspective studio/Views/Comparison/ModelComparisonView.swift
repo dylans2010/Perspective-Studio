@@ -281,6 +281,22 @@ struct ModelComparisonView: View {
                         Text("\(res.tokensPerSecond, format: .number.precision(.fractionLength(1))) tok/s")
                             .font(.system(size: 11, weight: .semibold))
                     }
+                    if let ttft = res.timeToFirstTokenSeconds {
+                        HStack(spacing: 4) {
+                            Image(systemName: "text.bubble")
+                                .font(.system(size: 10))
+                            Text("TTFT \(ttft, format: .number.precision(.fractionLength(2)))s")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                    }
+                    if res.loadSeconds > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down.to.line")
+                                .font(.system(size: 10))
+                            Text("Load \(res.loadSeconds, format: .number.precision(.fractionLength(1)))s")
+                                .font(.system(size: 11))
+                        }
+                    }
                     HStack(spacing: 4) {
                         Image(systemName: "doc.text")
                             .font(.system(size: 10))

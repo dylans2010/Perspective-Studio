@@ -411,15 +411,12 @@ struct HFModel: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// Checks whether this model's weights exist in the HF Hub cache.
+    /// Whether this model is *completely* downloaded and validated on disk.
+    /// A folder merely existing is not enough — every required file (all weight
+    /// shards, config, tokenizer) must be present at the right size. See
+    /// `ModelArtifactValidator`.
     var isDownloaded: Bool {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub")
-        let encoded = id.replacingOccurrences(of: "/", with: "--")
-        let modelDir = cacheDir.appendingPathComponent("models--\(encoded)")
-        let fm = FileManager.default
-        return fm.fileExists(atPath: modelDir.appending(path: "blobs").path)
-            || fm.fileExists(atPath: modelDir.appending(path: "snapshots").path)
+        ModelArtifactValidator.isInstalled(modelID: id)
     }
 }
 

@@ -39,6 +39,10 @@ struct ComparisonResult: Identifiable, Sendable {
     var tokensPerSecond: Double = 0.0
     var tokensCount: Int = 0
     var charactersCount: Int = 0
+    /// Measured time to first token for this run (nil until the first token).
+    var timeToFirstTokenSeconds: Double?
+    /// Measured model load time for this run (0 when already loaded).
+    var loadSeconds: Double = 0
 }
 
 @Observable
@@ -129,90 +133,96 @@ final class ModelComparisonViewModel {
 
     private func executeModelA(model: InstalledModel, prompt: String) async {
         resultA = ComparisonResult(id: model.id, displayName: model.displayName, status: .loading)
-
-        do {
-            let currentlyLoaded = await LLMService.shared.currentlyLoadedModelID()
-            if currentlyLoaded != model.id {
-                let stream = try await LLMService.shared.loadModelByID(model.id, isVideoModel: model.isVisual)
-                for try await _ in stream { }
-                try await LLMService.shared.finishLoading()
-            }
-
-            resultA?.status = .generating
-            let start = Date.now
-            let tokenStream = try await LLMService.shared.generateSinglePrompt(prompt: prompt)
-
-            var text = ""
-            var tokenCount = 0
-            for await token in tokenStream {
-                if Task.isCancelled { break }
-                text += token
-                tokenCount += 1
-                let elapsed = Date.now.timeIntervalSince(start)
-                resultA?.response = text
-                resultA?.charactersCount = text.count
-                resultA?.tokensCount = tokenCount
-                resultA?.latencySeconds = elapsed
-                if elapsed > 0.1 {
-                    resultA?.tokensPerSecond = Double(tokenCount) / elapsed
-                }
-            }
-
-            let finalElapsed = Date.now.timeIntervalSince(start)
-            resultA?.latencySeconds = finalElapsed
-            if finalElapsed > 0.1 {
-                resultA?.tokensPerSecond = Double(tokenCount) / finalElapsed
-            }
-            resultA?.status = .completed
-
-        } catch {
-            resultA?.status = .error(error.localizedDescription)
+        let outcome = await executeViaBackend(model: model, prompt: prompt) { partial in
+            self.resultA?.status = .generating
+            self.resultA?.response = partial
+            self.resultA?.charactersCount = partial.count
         }
+        applyOutcome(outcome, to: \.resultA, model: model, prompt: prompt)
     }
 
     private func executeModelB(model: InstalledModel, prompt: String) async {
         resultB = ComparisonResult(id: model.id, displayName: model.displayName, status: .loading)
+        // Sequential mode (the default under unified-memory pressure) unloads
+        // the other model first; the backend load below is measured either way.
+        if isSequentialMode,
+           await InferenceBackends.default.currentlyLoadedModelID() != model.id {
+            await InferenceBackends.default.unload()
+        }
+        let outcome = await executeViaBackend(model: model, prompt: prompt) { partial in
+            self.resultB?.status = .generating
+            self.resultB?.response = partial
+            self.resultB?.charactersCount = partial.count
+        }
+        applyOutcome(outcome, to: \.resultB, model: model, prompt: prompt)
+    }
 
+    private struct ExecutionOutcome {
+        var text: String = ""
+        var metrics: GenerationMetrics = GenerationMetrics()
+        var loadSeconds: Double = 0
+        var errorMessage: String?
+    }
+
+    /// Runs one model through the unified backend (feature L), streaming
+    /// partial text out and capturing *measured* load time, TTFT, tok/s.
+    private func executeViaBackend(
+        model: InstalledModel,
+        prompt: String,
+        onPartial: @escaping (String) -> Void
+    ) async -> ExecutionOutcome {
+        var outcome = ExecutionOutcome()
         do {
-            let currentlyLoaded = await LLMService.shared.currentlyLoadedModelID()
-            if currentlyLoaded != model.id {
-                // If model B is different, safely unload model A first to avoid unified memory pressure
-                await LLMService.shared.unloadModel()
-                let stream = try await LLMService.shared.loadModelByID(model.id, isVideoModel: model.isVisual)
-                for try await _ in stream { }
-                try await LLMService.shared.finishLoading()
-            }
-
-            resultB?.status = .generating
-            let start = Date.now
-            let tokenStream = try await LLMService.shared.generateSinglePrompt(prompt: prompt)
-
-            var text = ""
-            var tokenCount = 0
-            for await token in tokenStream {
+            outcome.loadSeconds = try await InferenceBackends.default.load(model: model)
+            let stream = try InferenceBackends.default.stream(prompt: prompt, systemPrompt: nil)
+            for try await event in stream {
                 if Task.isCancelled { break }
-                text += token
-                tokenCount += 1
-                let elapsed = Date.now.timeIntervalSince(start)
-                resultB?.response = text
-                resultB?.charactersCount = text.count
-                resultB?.tokensCount = tokenCount
-                resultB?.latencySeconds = elapsed
-                if elapsed > 0.1 {
-                    resultB?.tokensPerSecond = Double(tokenCount) / elapsed
+                switch event {
+                case .token(let token):
+                    outcome.text += token
+                    onPartial(outcome.text)
+                case .finished(let metrics):
+                    outcome.metrics = metrics
                 }
             }
-
-            let finalElapsed = Date.now.timeIntervalSince(start)
-            resultB?.latencySeconds = finalElapsed
-            if finalElapsed > 0.1 {
-                resultB?.tokensPerSecond = Double(tokenCount) / finalElapsed
-            }
-            resultB?.status = .completed
-
         } catch {
-            resultB?.status = .error(error.localizedDescription)
+            outcome.errorMessage = error.localizedDescription
         }
+        return outcome
+    }
+
+    private func applyOutcome(
+        _ outcome: ExecutionOutcome,
+        to keyPath: ReferenceWritableKeyPath<ModelComparisonViewModel, ComparisonResult?>,
+        model: InstalledModel,
+        prompt: String
+    ) {
+        if let errorMessage = outcome.errorMessage, outcome.text.isEmpty {
+            self[keyPath: keyPath]?.status = .error(errorMessage)
+            return
+        }
+        self[keyPath: keyPath]?.response = outcome.text
+        self[keyPath: keyPath]?.charactersCount = outcome.text.count
+        self[keyPath: keyPath]?.tokensCount = outcome.metrics.outputTokens
+        self[keyPath: keyPath]?.latencySeconds = outcome.metrics.totalSeconds
+        self[keyPath: keyPath]?.timeToFirstTokenSeconds = outcome.metrics.timeToFirstTokenSeconds
+        self[keyPath: keyPath]?.loadSeconds = outcome.loadSeconds
+        if let tps = outcome.metrics.tokensPerSecond {
+            self[keyPath: keyPath]?.tokensPerSecond = tps
+        }
+        self[keyPath: keyPath]?.status = .completed
+
+        // Every comparison run is also a measured benchmark record (feature E).
+        BenchmarkStore.shared.record(BenchmarkResult(
+            modelID: model.id,
+            promptPreview: String(prompt.prefix(80)),
+            loadSeconds: outcome.loadSeconds,
+            timeToFirstTokenSeconds: outcome.metrics.timeToFirstTokenSeconds,
+            totalSeconds: outcome.metrics.totalSeconds,
+            outputTokens: outcome.metrics.outputTokens,
+            tokensPerSecond: outcome.metrics.tokensPerSecond,
+            memoryFootprintBytes: outcome.metrics.memoryFootprintBytes
+        ))
     }
 
     func copyResponseA() {

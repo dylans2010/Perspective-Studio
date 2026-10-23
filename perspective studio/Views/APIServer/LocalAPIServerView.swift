@@ -296,6 +296,28 @@ struct LocalAPIServerView: View {
                             .foregroundStyle(.white.opacity(0.6))
                     }
                 }
+
+                // Bearer token (required hygiene for network exposure)
+                GridRow {
+                    Text("API Token")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.7))
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        SecureField("Optional — required if you expose the server", text: Binding(
+                            get: { serverManager.apiToken },
+                            set: { serverManager.apiToken = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 320)
+
+                        Text(serverManager.apiToken.isEmpty
+                            ? "No token set: anyone who can reach the port can use your models. Set a token before enabling network access — clients send it as 'Authorization: Bearer <token>'."
+                            : "Token required on every request (Authorization: Bearer …).")
+                            .font(.caption)
+                            .foregroundStyle(serverManager.apiToken.isEmpty && serverManager.allowLocalNetworkAccess ? .orange : .white.opacity(0.6))
+                    }
+                }
             }
         }
         .padding(16)

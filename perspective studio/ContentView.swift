@@ -24,6 +24,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     case compare
     case apiServer
     case downloads
+    case studio
     case settings
 
     var id: String { rawValue }
@@ -34,6 +35,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         case .compare: "Compare"
         case .apiServer: "Local API"
         case .downloads: "Downloads"
+        case .studio: "Studio"
         case .settings: "Settings"
         }
     }
@@ -44,6 +46,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         case .compare: "square.split.2x1"
         case .apiServer: "server.rack"
         case .downloads: "arrow.down.circle.fill"
+        case .studio: "flask.fill"
         case .settings: "gearshape.fill"
         }
     }
@@ -54,6 +57,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         case .compare: 2
         case .apiServer: 3
         case .downloads: 4
+        case .studio: 6
         case .settings: 5
         }
     }
@@ -64,6 +68,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         case .compare: "2"
         case .apiServer: "3"
         case .downloads: "4"
+        case .studio: "6"
         case .settings: "5"
         }
     }
@@ -125,11 +130,16 @@ struct MainView: View {
                 LocalAPIServerView(chatViewModel: chatViewModel, onClose: { selectedTab = .chat })
             case .downloads:
                 DownloadsView(chatViewModel: chatViewModel, onClose: { selectedTab = .chat })
+            case .studio:
+                StudioView(chatViewModel: chatViewModel, onClose: { selectedTab = .chat })
             case .settings:
                 SettingsView(onClose: { selectedTab = .chat })
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .onReceive(NotificationCenter.default.publisher(for: .perspectiveQuickChat)) { _ in
+            openWindow(id: "quick-chat")
+        }
         .onChange(of: chatViewModel.selectedConversation) {
             selectedTab = .chat
             Task { await LLMService.shared.resetSession() }

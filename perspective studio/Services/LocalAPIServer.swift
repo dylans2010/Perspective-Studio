@@ -95,6 +95,14 @@ final class LocalAPIServerManager {
 
     var isRunning: Bool = false
     var port: Int = 1234
+    /// Optional bearer token. When set, every request must send
+    /// `Authorization: Bearer <token>` — required hygiene before anyone
+    /// enables local-network exposure. Stored in UserDefaults like the
+    /// app's other non-secret preferences; empty means "no token" (the
+    /// loopback-only default posture).
+    var apiToken: String = UserDefaults.standard.string(forKey: "localAPIToken") ?? "" {
+        didSet { UserDefaults.standard.set(apiToken, forKey: "localAPIToken") }
+    }
     var allowLocalNetworkAccess: Bool = false
     var defaultModelID: String = ""
     var availableModels: [String] = []
@@ -249,6 +257,19 @@ final class LocalAPIServerManager {
             return
         }
 
+        // Bearer-token auth, when a token is configured.
+        if !apiToken.isEmpty {
+            let authorization = lines.first { $0.lowercased().hasPrefix("authorization:") } ?? ""
+            let presented = authorization
+                .dropFirst("authorization:".count)
+                .trimmingCharacters(in: .whitespaces)
+            guard presented == "Bearer \(apiToken)" else {
+                sendJSONError(status: 401, message: "Unauthorized: a valid Bearer token is required.", connection: connection)
+                recordLog(method: method, path: path, status: 401, model: "-", latency: Int(Date.now.timeIntervalSince(startTime) * 1000), tokens: 0, stream: false, client: clientIP, error: "401 Unauthorized")
+                return
+            }
+        }
+
         // GET / or /health
         if method == "GET" && (path == "/" || path == "/health" || path == "/v1") {
             let json = """
@@ -291,6 +312,18 @@ final class LocalAPIServerManager {
 
             let requestedModel = requestPayload.model ?? self.defaultModelID
             let isStream = requestPayload.stream ?? false
+
+            // Unknown model names get a proper 404 (OpenAI-style) instead of
+            // a 500 from a doomed load attempt. Skipped when we have no
+            // catalog yet, so the default model can still be resolved.
+            if !availableModels.isEmpty,
+               !availableModels.contains(requestedModel),
+               requestedModel != defaultModelID,
+               requestedModel != "default-local-model" {
+                sendJSONError(status: 404, message: "Model '\(requestedModel)' not found. See GET /v1/models.", connection: connection)
+                recordLog(method: method, path: path, status: 404, model: requestedModel, latency: Int(Date.now.timeIntervalSince(startTime) * 1000), tokens: 0, stream: isStream, client: clientIP, error: "404 Model Not Found")
+                return
+            }
 
             // Ensure model is loaded
             do {

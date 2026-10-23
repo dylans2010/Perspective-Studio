@@ -257,6 +257,60 @@ final class DownloadsManager {
         }
     }
 
+    // MARK: - Central download state (Model Library)
+
+    /// Live progress for models currently downloading, keyed by model id.
+    var activeDownloads: [String: ModelDownloadProgress] = [:]
+    /// Last download failure per model id, for retry UI.
+    var modelDownloadErrors: [String: String] = [:]
+    private var downloadTasks: [String: Task<Void, Never>] = [:]
+
+    func isDownloading(_ modelID: String) -> Bool { activeDownloads[modelID] != nil }
+
+    func downloadProgress(_ modelID: String) -> Double? {
+        activeDownloads[modelID]?.fractionCompleted
+    }
+
+    /// Starts (or resumes) a download through `ModelDownloadService`.
+    /// Already-complete files are reused; the model only becomes installed
+    /// after full validation inside the service.
+    func startDownload(_ model: HFModel) {
+        guard downloadTasks[model.id] == nil else { return }
+        modelDownloadErrors[model.id] = nil
+        downloadTasks[model.id] = Task {
+            defer {
+                self.activeDownloads[model.id] = nil
+                self.downloadTasks[model.id] = nil
+            }
+            do {
+                _ = try await ModelDownloadService.shared.download(modelID: model.id) { progress in
+                    Task { @MainActor in
+                        self.activeDownloads[model.id] = progress
+                    }
+                }
+            } catch is CancellationError {
+                // Cancelled: partial files stay on disk for resume, the model
+                // stays *not installed*, and no error is shown.
+            } catch {
+                self.modelDownloadErrors[model.id] = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelDownload(_ modelID: String) {
+        downloadTasks[modelID]?.cancel()
+        Task { await ModelDownloadService.shared.cancel(modelID: modelID) }
+    }
+
+    func retryDownload(_ model: HFModel) {
+        startDownload(model)
+    }
+
+    /// Validation state for a catalog model, straight from the artifact validator.
+    func validation(for model: HFModel) -> ModelValidationResult {
+        ModelArtifactValidator.validate(modelID: model.id)
+    }
+
     func fetchModelsFromHF(forceRefresh: Bool = false) async {
         isLoading = true
         errorMessage = nil

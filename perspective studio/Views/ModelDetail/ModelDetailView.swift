@@ -8,6 +8,7 @@ struct ModelDetailView: View {
     @State private var showLoadConfirmation = false
     @State private var showRemoveConfirmation = false
     @State private var downloadCheckID = UUID()
+    @State private var details: HFModelDetails?
 
     @AppStorage("experienceLevel") private var experienceLevelRaw: String = ExperienceLevel.beginner.rawValue
     private var experienceLevel: ExperienceLevel {
@@ -49,6 +50,10 @@ struct ModelDetailView: View {
                     technicalSection
                 }
 
+                if let details {
+                    repositorySection(details)
+                }
+
                 if let card = modelCard {
                     modelCardSection(card)
                 }
@@ -57,6 +62,7 @@ struct ModelDetailView: View {
         }
         .navigationTitle(model.displayName)
         .task { await loadModelCard() }
+        .task { details = try? await HuggingFaceService.shared.fetchModelDetails(for: model.id) }
         .alert("Load Model?", isPresented: $showLoadConfirmation) {
             Button("Load", role: .none) { chatViewModel.loadHFModel(model) }
             Button("Cancel", role: .cancel) {}
@@ -439,6 +445,38 @@ struct ModelDetailView: View {
             Text(card)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Real repository metadata from the Hugging Face API: every file that
+    /// will be downloaded (with exact sizes), total size, license, and a link
+    /// to the repository — so users can verify a download before it starts.
+    private func repositorySection(_ details: HFModelDetails) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Repository Files")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+
+            LabeledContent("Total download size", value: details.totalSizeFormatted)
+            if let license = details.license {
+                LabeledContent("License", value: license)
+            }
+            if let url = details.repositoryURL {
+                Link("Open on Hugging Face", destination: url)
+                    .font(.subheadline)
+            }
+
+            ForEach(details.files, id: \.path) { file in
+                HStack {
+                    Text(file.path)
+                        .font(.caption)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 

@@ -30,6 +30,8 @@ struct ChatDetailView: View {
     @AppStorage("thinkingBudget") private var thinkingBudget: String = "medium"
 
     @State private var showSkillsPopover: Bool = false
+    @State private var editingMessage: Message?
+    @State private var editedMessageText: String = ""
     @FocusState private var isInputFocused: Bool
 
     private let suggestions: [ChatPromptSuggestion] = [
@@ -105,6 +107,34 @@ struct ChatDetailView: View {
             if (conversation.systemPrompt == nil || conversation.systemPrompt?.isEmpty == true) && !globalSystemPrompt.isEmpty {
                 conversation.systemPrompt = globalSystemPrompt
             }
+        }
+        .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+            handleDrop(providers: providers)
+        }
+        .onPasteCommand(of: [.image, .png, .jpeg]) { providers in
+            _ = handleDrop(providers: providers)
+        }
+        .sheet(item: $editingMessage) { message in
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Edit Message")
+                    .font(.headline)
+                Text("Editing discards the replies after this message and generates a new response.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $editedMessageText)
+                    .frame(minHeight: 120)
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) { editingMessage = nil }
+                    Button("Resend") {
+                        chatViewModel.editUserMessage(message, newContent: editedMessageText, in: modelContext)
+                        editingMessage = nil
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(20)
+            .frame(width: 480)
         }
     }
 
@@ -240,8 +270,16 @@ struct ChatDetailView: View {
             ScrollView {
                 LazyVStack(spacing: 12) {
                     ForEach(sortedMessages) { message in
-                        MessageRowView(message: message)
-                            .id(message.id)
+                        MessageRowView(
+                            message: message,
+                            onBranch: { chatViewModel.branchConversation(from: conversation, through: message, in: modelContext) },
+                            onRegenerate: { chatViewModel.regenerateLastResponse(in: modelContext) },
+                            onEdit: {
+                                editingMessage = message
+                                editedMessageText = message.content
+                            }
+                        )
+                        .id(message.id)
                     }
 
                     if chatViewModel.isGenerating {
@@ -309,7 +347,7 @@ struct ChatDetailView: View {
     private var bottomComposerBar: some View {
         VStack(spacing: 8) {
             // Attachments pill list
-            if !chatViewModel.attachedFileURLs.isEmpty || chatViewModel.attachedVideoURL != nil {
+            if !chatViewModel.attachedFileURLs.isEmpty || chatViewModel.attachedVideoURL != nil || !chatViewModel.attachedImageURLs.isEmpty {
                 attachmentsRow
             }
 
@@ -469,6 +507,33 @@ struct ChatDetailView: View {
                         chatViewModel.attachedFileURLs.removeAll { $0 == url }
                     }
                 }
+                ForEach(chatViewModel.attachedImageURLs, id: \.self) { url in
+                    HStack(spacing: 6) {
+                        if let image = NSImage(contentsOf: url) {
+                            Image(nsImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 28, height: 28)
+                                .clipShape(.rect(cornerRadius: 6))
+                        }
+                        Text(url.lastPathComponent)
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Button {
+                            chatViewModel.attachedImageURLs.removeAll { $0 == url }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .liquidGlass(.capsule)
+                    .help(chatViewModel.selectedModelIsVisual ? "Image will be sent to the vision model" : "The selected model does not support images — this will not be sent")
+                }
             }
         }
         .scrollIndicators(.hidden)
@@ -528,14 +593,56 @@ struct ChatDetailView: View {
 
         if panel.runModal() == .OK {
             for url in panel.urls {
-                let ext = url.pathExtension.lowercased()
-                if ["mp4", "mov", "m4v", "avi", "mkv"].contains(ext) {
-                    chatViewModel.attachedVideoURL = url
-                } else if !chatViewModel.attachedFileURLs.contains(url) {
-                    chatViewModel.attachedFileURLs.append(url)
+                routeAttachment(url)
+            }
+        }
+    }
+
+    /// Routes an attached/dropped file to the right bucket: videos, images
+    /// (vision pipeline), or generic files (text extraction).
+    private func routeAttachment(_ url: URL) {
+        let ext = url.pathExtension.lowercased()
+        if ["mp4", "mov", "m4v", "avi", "mkv"].contains(ext) {
+            chatViewModel.attachedVideoURL = url
+        } else if ["png", "jpg", "jpeg", "heic", "heif", "gif", "tiff", "bmp", "webp"].contains(ext) {
+            if !chatViewModel.attachedImageURLs.contains(url) {
+                chatViewModel.attachedImageURLs.append(url)
+            }
+        } else if !chatViewModel.attachedFileURLs.contains(url) {
+            chatViewModel.attachedFileURLs.append(url)
+        }
+    }
+
+    /// Handles files/images dropped onto the chat (feature H drag-and-drop).
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        var handled = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                handled = true
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                    var fileURL: URL?
+                    if let data = item as? Data {
+                        fileURL = URL(dataRepresentation: data, relativeTo: nil)
+                    } else if let url = item as? URL {
+                        fileURL = url
+                    }
+                    if let fileURL {
+                        Task { @MainActor in routeAttachment(fileURL) }
+                    }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                handled = true
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    guard let data else { return }
+                    let temp = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("dropped-\(UUID().uuidString).png")
+                    if (try? data.write(to: temp)) != nil {
+                        Task { @MainActor in routeAttachment(temp) }
+                    }
                 }
             }
         }
+        return handled
     }
 }
 
@@ -543,6 +650,9 @@ struct ChatDetailView: View {
 
 private struct MessageRowView: View {
     let message: Message
+    var onBranch: (() -> Void)? = nil
+    var onRegenerate: (() -> Void)? = nil
+    var onEdit: (() -> Void)? = nil
     @State private var copied = false
     @State private var tts = TTSService.shared
 
@@ -576,14 +686,25 @@ private struct MessageRowView: View {
                         .foregroundStyle(.white.opacity(0.6))
                 }
 
-                // Bubble using Liquid Glass
-                Text(message.content)
+                // Bubble using Liquid Glass — Markdown with code-block panels
+                MarkdownContentView(content: message.content)
                     .font(.system(size: 14))
                     .foregroundStyle(.white)
-                    .textSelection(.enabled)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .liquidGlass(.rect(cornerRadius: 18), isClear: !isAssistant)
+                    .contextMenu {
+                        Button("Copy Text", systemImage: "doc.on.doc") { copyText(message.content) }
+                        if let onBranch {
+                            Button("Branch From Here", systemImage: "arrow.branch", action: onBranch)
+                        }
+                        if !isAssistant, let onEdit {
+                            Button("Edit & Resend", systemImage: "pencil", action: onEdit)
+                        }
+                        if isAssistant, let onRegenerate {
+                            Button("Regenerate Response", systemImage: "arrow.clockwise", action: onRegenerate)
+                        }
+                    }
 
                 // Assistant action buttons (Copy & TTS)
                 if isAssistant && !message.content.isEmpty {

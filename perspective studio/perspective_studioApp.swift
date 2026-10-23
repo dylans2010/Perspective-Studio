@@ -6,6 +6,7 @@ struct LocallyApp: App {
     @State private var selectedTab: SidebarTab = .chat
     @State private var chatViewModel = ChatViewModel()
     @Environment(\.openWindow) private var openWindow
+    @NSApplicationDelegateAdaptor(PerspectiveAppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup {
@@ -22,6 +23,11 @@ struct LocallyApp: App {
             }
 
             CommandGroup(after: .newItem) {
+                Button("Quick Chat") {
+                    openWindow(id: "quick-chat")
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+
                 Button("New Chat") {
                     selectedTab = .chat
                 }
@@ -48,5 +54,17 @@ struct LocallyApp: App {
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 820, height: 620)
+
+        // Compact chat window (feature M) — also the global-hotkey target.
+        Window("Quick Chat", id: "quick-chat") {
+            QuickChatView(chatViewModel: chatViewModel)
+        }
+        .windowResizability(.contentSize)
+
+        // Menu-bar companion (feature M).
+        MenuBarExtra("Locally Quick Chat", systemImage: "cpu") {
+            QuickChatView(chatViewModel: chatViewModel)
+        }
+        .menuBarExtraStyle(.window)
     }
 }

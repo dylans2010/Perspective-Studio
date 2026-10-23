@@ -12,6 +12,10 @@ final class Conversation {
     var lastSummarizedMessageCount: Int = 0
     var temperature: Double = 0.7
     var systemPrompt: String?
+    /// Archived conversations leave the main list but are never deleted.
+    var isArchived: Bool = false
+    /// Set on conversations created by branching, pointing at the original.
+    var parentConversationID: UUID?
 
     @Relationship(deleteRule: .cascade, inverse: \Message.conversation)
     var messages: [Message] = []

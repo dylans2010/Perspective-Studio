@@ -42,12 +42,14 @@ final class ChatViewModel {
     var isLoadingModels: Bool = false
     var attachedVideoURL: URL?
     var attachedFileURLs: [URL] = []
+    var attachedImageURLs: [URL] = []
     var installedModels: [InstalledModel] = []
     var activeSkills: Set<AgentSkill> = []
     var downloadErrors: [String: String] = [:]
 
     private var generationTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    private var downloadTask: Task<Void, Never>?
     private var lastAnnouncedMilestone: Int = 0
 
     func toggleSkill(_ skill: AgentSkill) {
@@ -110,9 +112,11 @@ final class ChatViewModel {
 
             let videoURL = attachedVideoURL
             let fileURLs = attachedFileURLs
+            let imageURLs = attachedImageURLs
             messageText = ""
             attachedVideoURL = nil
             attachedFileURLs = []
+            attachedImageURLs = []
 
             Task {
                 do {
@@ -125,7 +129,7 @@ final class ChatViewModel {
                     modelState = .ready(modelToLoad.displayName)
 
                     // Now proceed with sending message
-                    await processAndSend(text: text, videoURL: videoURL, fileURLs: fileURLs, in: conversation, context: context)
+                    await processAndSend(text: text, videoURL: videoURL, fileURLs: fileURLs, imageURLs: imageURLs, in: conversation, context: context)
                 } catch {
                     modelState = .error(error.localizedDescription)
                     let warning = Message(role: .system, content: "Could not load \(modelToLoad.displayName): \(error.localizedDescription)")
@@ -139,16 +143,22 @@ final class ChatViewModel {
 
         let videoURL = attachedVideoURL
         let fileURLs = attachedFileURLs
+        let imageURLs = attachedImageURLs
         messageText = ""
         attachedVideoURL = nil
         attachedFileURLs = []
+        attachedImageURLs = []
 
         Task {
-            await processAndSend(text: text, videoURL: videoURL, fileURLs: fileURLs, in: conversation, context: context)
+            await processAndSend(text: text, videoURL: videoURL, fileURLs: fileURLs, imageURLs: imageURLs, in: conversation, context: context)
         }
     }
 
-    private func processAndSend(text: String, videoURL: URL?, fileURLs: [URL], in conversation: Conversation, context: ModelContext) async {
+    /// Knowledge-base passages retrieved for the pending turn (injected into
+    /// the system prompt by `generateResponse`, with citations).
+    private var pendingKnowledgeContext: String?
+
+    private func processAndSend(text: String, videoURL: URL?, fileURLs: [URL], imageURLs: [URL] = [], in conversation: Conversation, context: ModelContext) async {
         // Read file contents off the main thread
         var parts: [String] = []
 
@@ -169,11 +179,36 @@ final class ChatViewModel {
             }
         }
 
+        // Images (feature H): only vision models receive them. For any other
+        // model the attachment is *not* silently dropped or read as text —
+        // the user gets an explicit note and the turn proceeds text-only.
+        var persistedImageNames: [String] = []
+        if !imageURLs.isEmpty {
+            if selectedModelIsVisual {
+                for imageURL in imageURLs {
+                    parts.append("🖼 \(imageURL.lastPathComponent)")
+                    if let storedName = Self.persistImageAttachment(imageURL) {
+                        persistedImageNames.append(storedName)
+                    }
+                }
+            } else {
+                parts.append("⚠️ \(imageURLs.count) image(s) attached, but the selected model does not support images, so they were not sent. Switch to a vision model (Downloads → look for the Vision badge) to use them.")
+            }
+        }
+
         parts.append(text)
+
+        // Knowledge-base retrieval (feature I) when the user enabled it:
+        // passages are injected as cited context for this turn only.
+        pendingKnowledgeContext = nil
+        if UserDefaults.standard.bool(forKey: "knowledgeUseInChat") {
+            pendingKnowledgeContext = KnowledgeBaseStore.shared.contextBlock(for: text)
+        }
 
         let displayContent = parts.joined(separator: "\n\n")
 
         let userMessage = Message(role: .user, content: displayContent)
+        userMessage.imageFileNames = persistedImageNames
         userMessage.conversation = conversation
         conversation.messages.append(userMessage)
         conversation.updatedAt = .now
@@ -264,9 +299,21 @@ final class ChatViewModel {
                     effectiveSystemPrompt += thinkingInstruction
                 }
 
+                if let knowledge = pendingKnowledgeContext {
+                    effectiveSystemPrompt += "\n\n[Relevant passages from the user's local knowledge base — cite them like [Title · passage N] when you use them]:\n" + knowledge
+                    pendingKnowledgeContext = nil
+                }
+
+                // Re-attach this turn's images (persisted copies) for vision models.
+                let lastUserMessage = conversation.sortedMessages.last(where: { $0.role == .user })
+                let turnImageURLs: [URL] = (lastUserMessage?.imageFileNames ?? []).map {
+                    Self.attachmentsDirectory.appendingPathComponent($0)
+                }
+
                 let stream = try await LLMService.shared.generate(
                     messages: messages,
                     videoURLs: videoURLs,
+                    imageURLs: turnImageURLs,
                     systemPrompt: effectiveSystemPrompt.isEmpty ? nil : effectiveSystemPrompt,
                     temperature: conversation.temperature
                 )
@@ -336,16 +383,25 @@ final class ChatViewModel {
 
         loadTask = Task {
             do {
+                // Download first, through the real downloader, unless a complete
+                // validated copy is already on disk. Loading a partial artifact
+                // was the original bug.
+                if !model.isDownloaded {
+                    _ = try await ModelDownloadService.shared.download(modelID: model.id) { progress in
+                        Task { @MainActor in
+                            self.modelState = .downloading(progress.fractionCompleted)
+                            self.announceProgressMilestone(progress.fractionCompleted)
+                        }
+                    }
+                    self.scanInstalledModels()
+                }
                 let isVisual = model.category == .video || model.category == .vision
+                modelState = .loading
                 let stream = try await LLMService.shared.loadModelByID(
                     model.id,
                     isVideoModel: isVisual
                 )
-                for try await progress in stream {
-                    modelState = .downloading(progress)
-                    announceProgressMilestone(progress)
-                }
-                modelState = .loading
+                for try await _ in stream { }
                 try await LLMService.shared.finishLoading()
                 modelState = .ready(model.displayName)
                 AccessibilityNotification.Announcement("Model ready to use").post()
@@ -389,6 +445,102 @@ final class ChatViewModel {
         }
     }
 
+    // MARK: - Conversation management (feature G)
+
+    func renameConversation(_ conversation: Conversation, to newTitle: String, in context: ModelContext) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        conversation.title = trimmed
+        conversation.updatedAt = .now
+        try? context.save()
+    }
+
+    func setConversationArchived(_ conversation: Conversation, archived: Bool, in context: ModelContext) {
+        conversation.isArchived = archived
+        try? context.save()
+    }
+
+    /// Creates a new conversation containing copies of the original's messages
+    /// up to (and including) `message`. The original is left untouched, and
+    /// the branch may switch models independently.
+    @discardableResult
+    func branchConversation(from conversation: Conversation, through message: Message, in context: ModelContext) -> Conversation {
+        let branch = Conversation(title: conversation.title + " (branch)", modelIdentifier: conversation.modelIdentifier)
+        branch.systemPrompt = conversation.systemPrompt
+        branch.temperature = conversation.temperature
+        branch.parentConversationID = conversation.id
+        context.insert(branch)
+        for original in conversation.sortedMessages {
+            let copy = Message(role: original.role, content: original.content)
+            copy.timestamp = original.timestamp
+            copy.imageFileNames = original.imageFileNames
+            copy.conversation = branch
+            branch.messages.append(copy)
+            if original.id == message.id { break }
+        }
+        try? context.save()
+        selectedConversation = branch
+        return branch
+    }
+
+    /// Regenerates the response to the last user message: the previous
+    /// assistant reply is removed and a fresh one is generated in its place.
+    func regenerateLastResponse(in context: ModelContext) {
+        guard let conversation = selectedConversation, !isGenerating else { return }
+        let sorted = conversation.sortedMessages
+        guard let lastUserIndex = sorted.lastIndex(where: { $0.role == .user }) else { return }
+        for message in sorted[(lastUserIndex + 1)...] {
+            conversation.messages.removeAll { $0.id == message.id }
+            context.delete(message)
+        }
+        try? context.save()
+        generateResponse(for: conversation, in: context)
+    }
+
+    /// Edits a user message, discards everything after it, and regenerates —
+    /// the classic edit-and-resend flow. The discarded tail is removed only
+    /// from this conversation.
+    func editUserMessage(_ message: Message, newContent: String, in context: ModelContext) {
+        guard let conversation = message.conversation, !isGenerating else { return }
+        let trimmed = newContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        message.content = trimmed
+        let sorted = conversation.sortedMessages
+        if let index = sorted.firstIndex(where: { $0.id == message.id }) {
+            for later in sorted[(index + 1)...] {
+                conversation.messages.removeAll { $0.id == later.id }
+                context.delete(later)
+            }
+        }
+        conversation.updatedAt = .now
+        try? context.save()
+        generateResponse(for: conversation, in: context)
+    }
+
+    // MARK: - Image attachment storage
+
+    static var attachmentsDirectory: URL {
+        JSONFileStore.directory.appendingPathComponent("Attachments")
+    }
+
+    /// Copies an attached image into app storage so the turn (and its vision
+    /// context) survives relaunch. Returns the stored file name.
+    static func persistImageAttachment(_ url: URL) -> String? {
+        do {
+            try FileManager.default.createDirectory(at: attachmentsDirectory, withIntermediateDirectories: true)
+            let name = "\(UUID().uuidString).\(url.pathExtension.isEmpty ? "png" : url.pathExtension)"
+            let destination = attachmentsDirectory.appendingPathComponent(name)
+            if url != destination {
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.copyItem(at: url, to: destination)
+            }
+            return name
+        } catch {
+            print("❌ [Locally] Could not store image attachment: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     func scanInstalledModels() {
         let fm = FileManager.default
         let hubDir = fm.homeDirectoryForCurrentUser
@@ -408,10 +560,9 @@ final class ChatViewModel {
             let modelName = String(parts[1])
             let modelId = "\(author)/\(modelName)"
 
-            let modelDir = hubDir.appendingPathComponent(entry)
-            let hasBlobsOrSnapshots = fm.fileExists(atPath: modelDir.appendingPathComponent("blobs").path)
-                || fm.fileExists(atPath: modelDir.appendingPathComponent("snapshots").path)
-            guard hasBlobsOrSnapshots else { continue }
+            // Only *complete* models count as installed. A partial download
+            // (missing shards / tokenizer / config) must never reach the loader.
+            guard ModelArtifactValidator.isInstalled(modelID: modelId) else { continue }
 
             // Skip models that cannot be used for chat (TTS, transcription, embedding, etc.)
             guard !Self.looksLikeNonChatModel(modelName) else { continue }
@@ -439,41 +590,52 @@ final class ChatViewModel {
         loadHFModel(hfModel)
     }
 
-    /// Downloads a model without attempting to load it into memory.
-    /// Used for model types that can't be run yet (e.g. TTS).
+    /// Downloads a model *without* loading it into memory, using the real
+    /// `ModelDownloadService`: full repo manifest, every file (all weight
+    /// shards, config, tokenizer), resumable + retried transfers, and
+    /// size/SHA-256 validation. The model is only reported downloaded after
+    /// `ModelArtifactValidator` confirms the artifact is complete — a failed
+    /// or interrupted download stays *not downloaded*.
     func downloadHFModel(_ model: HFModel) {
-        loadTask?.cancel()
+        downloadTask?.cancel()
         selectedModelID = model.id
-        selectedModelIsVisual = false
+        selectedModelIsVisual = model.category == .video || model.category == .vision
         modelState = .downloading(0)
         lastAnnouncedMilestone = 0
+        downloadErrors[model.id] = nil
 
-        loadTask = Task {
+        downloadTask = Task {
             do {
-                let stream = try await LLMService.shared.loadModelByID(model.id)
-                for try await progress in stream {
-                    modelState = .downloading(progress)
-                    announceProgressMilestone(progress)
+                _ = try await ModelDownloadService.shared.download(modelID: model.id) { progress in
+                    Task { @MainActor in
+                        self.modelState = .downloading(progress.fractionCompleted)
+                        self.announceProgressMilestone(progress.fractionCompleted)
+                    }
                 }
-                // Loading succeeded (unexpected for TTS, but fine)
-                try await LLMService.shared.finishLoading()
-                await LLMService.shared.unloadModel()
                 modelState = .idle
+                scanInstalledModels()
                 AccessibilityNotification.Announcement("Model downloaded successfully").post()
+            } catch is CancellationError {
+                modelState = .idle
             } catch {
-                // Expected for non-loadable models — check if files ended up in cache
-                let isNowDownloaded = model.isDownloaded
-                if isNowDownloaded {
-                    modelState = .idle
-                    AccessibilityNotification.Announcement("Model downloaded successfully").post()
-                } else {
-                    let log = "[\(Date().formatted(date: .abbreviated, time: .standard))] Error downloading \(model.id): \(error.localizedDescription)"
-                    self.downloadErrors[model.id] = log
-                    print("❌ [Locally Model Error] \(log)")
-                    modelState = .error(friendlyErrorMessage(for: error, model: model))
-                }
+                let log = "[\(Date().formatted(date: .abbreviated, time: .standard))] Error downloading \(model.id): \(error.localizedDescription)"
+                self.downloadErrors[model.id] = log
+                print("❌ [Locally Model Error] \(log)")
+                modelState = .error(friendlyErrorMessage(for: error, model: model))
             }
         }
+    }
+
+    /// Cancels the in-flight model download, if any. Already-downloaded files
+    /// and resume data are kept, so a later download resumes instead of
+    /// restarting — but the model is *not* marked installed.
+    func cancelDownload() {
+        downloadTask?.cancel()
+        downloadTask = nil
+        if let id = selectedModelID {
+            Task { await ModelDownloadService.shared.cancel(modelID: id) }
+        }
+        modelState = .idle
     }
 
     /// Heuristic to detect models that cannot be used for chat (TTS, transcription, embedding, audio, translation).

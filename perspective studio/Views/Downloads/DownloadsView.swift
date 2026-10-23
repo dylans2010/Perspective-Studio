@@ -283,11 +283,36 @@ struct DownloadsView: View {
                                             .foregroundStyle(.green)
                                             .clipShape(.capsule)
                                     }
+
+                                    if !model.isComplete {
+                                        Text("Incomplete")
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(.orange.opacity(0.2))
+                                            .foregroundStyle(.orange)
+                                            .clipShape(.capsule)
+                                    }
                                 }
 
                                 Text("\(model.author) • \(model.sizeFormatted)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+
+                                if !model.isComplete {
+                                    Text(model.issues.first ?? "Download did not finish")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                    Button("Resume / Repair Download") {
+                                        let hfModel = HFModel(
+                                            id: model.id, name: model.id, downloads: 0, likes: 0,
+                                            tags: [], pipelineTag: nil, createdAt: nil
+                                        )
+                                        chatViewModel.downloadHFModel(hfModel)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
                             }
 
                             Spacer()
@@ -339,13 +364,16 @@ struct DownloadsView: View {
                 let modelDir = hubDir.appendingPathComponent(entry)
                 let blobsDir = modelDir.appendingPathComponent("blobs")
                 let size = Self.calculateDirSize(at: blobsDir, fm: fm)
+                let validation = ModelArtifactValidator.validate(modelID: modelId)
 
                 result.append(LocalDiskModel(
                     id: modelId,
                     displayName: modelName,
                     author: author,
                     sizeBytes: size,
-                    url: modelDir
+                    url: modelDir,
+                    isComplete: validation.isComplete,
+                    issues: validation.issues
                 ))
             }
             return result.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
@@ -406,6 +434,10 @@ struct LocalDiskModel: Identifiable {
     let author: String
     let sizeBytes: Int64
     let url: URL
+    /// Populated by scans that run `ModelArtifactValidator`; defaults keep
+    /// other call sites source-compatible.
+    var isComplete: Bool = true
+    var issues: [String] = []
 
     var sizeFormatted: String {
         ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)

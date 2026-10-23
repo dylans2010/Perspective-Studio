@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct ConversationListView: View {
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
     @Binding var selectedConversation: Conversation?
     var onOpenSettings: (() -> Void)? = nil
@@ -17,6 +18,9 @@ struct ConversationListView: View {
     @AppStorage("chatGradientBottomHex") private var customBottomHex: String = GradientTheme.defaultBottomHex
 
     @State private var searchQuery: String = ""
+    @State private var showArchived: Bool = false
+    @State private var renameTarget: Conversation?
+    @State private var renameText: String = ""
 
     private var activeGradientColors: [Color] {
         GradientTheme.activeColors(
@@ -27,12 +31,18 @@ struct ConversationListView: View {
     }
 
     private var filteredConversations: [Conversation] {
+        let visible = conversations.filter { showArchived ? $0.isArchived : !$0.isArchived }
         if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return conversations
+            return visible
         }
-        return conversations.filter {
-            $0.title.localizedStandardContains(searchQuery)
+        return visible.filter { conversation in
+            conversation.title.localizedStandardContains(searchQuery)
+                || conversation.messages.contains { $0.content.localizedStandardContains(searchQuery) }
         }
+    }
+
+    private var archivedCount: Int {
+        conversations.filter(\.isArchived).count
     }
 
     var body: some View {
@@ -147,8 +157,19 @@ struct ConversationListView: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 12)
 
-            // Recents Header
-            Text("Recents")
+            // Recents Header + archived toggle
+            HStack {
+                Text(showArchived ? "Archived" : "Recents")
+                Spacer()
+                if archivedCount > 0 || showArchived {
+                    Button(showArchived ? "Show Active" : "Archived (\(archivedCount))") {
+                        showArchived.toggle()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.65))
+                }
+            }
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.65))
                 .padding(.horizontal, 16)
@@ -172,6 +193,14 @@ struct ConversationListView: View {
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
+                            Button("Rename", systemImage: "pencil") {
+                                renameTarget = conversation
+                                renameText = conversation.title
+                            }
+                            Button(conversation.isArchived ? "Unarchive" : "Archive", systemImage: conversation.isArchived ? "tray.and.arrow.up" : "archivebox") {
+                                conversation.isArchived.toggle()
+                                try? modelContext.save()
+                            }
                             Button("Delete", role: .destructive) {
                                 onDelete(conversation)
                             }
@@ -182,6 +211,20 @@ struct ConversationListView: View {
                 .padding(.bottom, 16)
             }
             .scrollIndicators(.hidden)
+            .alert("Rename Conversation", isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )) {
+                TextField("Title", text: $renameText)
+                Button("Save") {
+                    if let target = renameTarget {
+                        target.title = renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? target.title : renameText
+                        try? modelContext.save()
+                    }
+                    renameTarget = nil
+                }
+                Button("Cancel", role: .cancel) { renameTarget = nil }
+            }
             .overlay {
                 if filteredConversations.isEmpty {
                     VStack(spacing: 8) {

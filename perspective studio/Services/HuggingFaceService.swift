@@ -87,6 +87,35 @@ actor HuggingFaceService {
         return models
     }
 
+    /// Full repository details for the Model Explorer / Model Detail screen:
+    /// the real file list with exact sizes (tree API), license, and totals.
+    func fetchModelDetails(for modelId: String) async throws -> HFModelDetails {
+        let encodedID = modelId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? modelId
+        guard let url = URL(string: "https://huggingface.co/api/models/\(encodedID)") else {
+            throw HFError.invalidURL
+        }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw HFError.httpError(http.statusCode)
+        }
+        let info = try JSONDecoder().decode(HFModelInfoResponse.self, from: data)
+        let manifest = try await ModelDownloadService.shared.fetchManifest(modelID: modelId)
+        let license = info.cardData?.license
+            ?? info.tags.first(where: { $0.hasPrefix("license:") }).map { String($0.dropFirst("license:".count)) }
+        return HFModelDetails(
+            id: info.id,
+            revision: info.sha,
+            license: license,
+            downloads: info.downloads ?? 0,
+            likes: info.likes ?? 0,
+            pipelineTag: info.pipelineTag,
+            tags: info.tags,
+            files: manifest.files.sorted { $0.path < $1.path },
+            totalBytes: manifest.totalBytes,
+            repositoryURL: URL(string: "https://huggingface.co/\(modelId)")
+        )
+    }
+
     func fetchModelCard(for modelId: String) async throws -> String {
         let urlString = "https://huggingface.co/\(modelId)/raw/main/README.md"
         guard let url = URL(string: urlString) else {
@@ -229,5 +258,42 @@ private struct HFModelResponse: Decodable, Sendable {
 
     private enum FallbackKeys: String, CodingKey {
         case id
+    }
+}
+
+/// Detailed, real metadata for one Hugging Face repository.
+struct HFModelDetails: Sendable {
+    let id: String
+    let revision: String
+    let license: String?
+    let downloads: Int
+    let likes: Int
+    let pipelineTag: String?
+    let tags: [String]
+    let files: [HFRepoFile]
+    let totalBytes: Int64
+    let repositoryURL: URL?
+
+    var totalSizeFormatted: String {
+        ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+    }
+}
+
+private struct HFModelInfoResponse: Decodable {
+    let id: String
+    let sha: String
+    let downloads: Int?
+    let likes: Int?
+    let pipelineTag: String?
+    let tags: [String]
+    let cardData: CardData?
+
+    struct CardData: Decodable {
+        let license: String?
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, sha, downloads, likes, tags, cardData
+        case pipelineTag = "pipeline_tag"
     }
 }
