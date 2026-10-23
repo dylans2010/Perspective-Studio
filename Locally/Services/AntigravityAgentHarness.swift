@@ -272,15 +272,17 @@ public final class AntigravityAgentHarness {
         }
 
         defer {
-            self.isRunning = false
-            self.activeToolName = nil
-            // Only the run that still owns the harness may clear the
-            // active id — a finishing old run must not erase a newer
-            // run's identity (which would silently un-scope its events).
+            // Only the run that still owns the harness may clear its
+            // state — a finishing old run must not mark a newer run as
+            // not-running, erase its identity (which would silently
+            // un-scope its events), or forget its cancellation record
+            // before it has observed it.
             if self.activeRunID == thisRunID {
+                self.isRunning = false
+                self.activeToolName = nil
                 self.activeRunID = nil
+                self.cancelledRunIDs.remove(thisRunID)
             }
-            self.cancelledRunIDs.remove(thisRunID)
         }
 
         let selectedBackend = backend ?? InferenceBackends.default
