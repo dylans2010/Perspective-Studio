@@ -5,8 +5,8 @@ import Foundation
 /// `Application Support/Locally/`; every payload is wrapped in an
 /// envelope with a `schemaVersion` so future migrations have a hook, instead
 /// of these stores being coupled to the SwiftData schema used for chats.
-enum JSONFileStore {
-    struct Envelope<Payload: Codable>: Codable {
+nonisolated enum JSONFileStore {
+    nonisolated struct Envelope<Payload: Sendable>: Sendable {
         var schemaVersion: Int
         var payload: Payload
     }
@@ -29,7 +29,7 @@ enum JSONFileStore {
         return current
     }()
 
-    nonisolated static func load<Payload: Codable>(_ type: Payload.Type, filename: String) -> Payload? {
+    nonisolated static func load<Payload: Decodable & Sendable>(_ type: Payload.Type, filename: String) -> Payload? {
         let url = directory.appendingPathComponent(filename)
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
@@ -37,7 +37,7 @@ enum JSONFileStore {
         return try? decoder.decode(Envelope<Payload>.self, from: data).payload
     }
 
-    nonisolated static func save<Payload: Codable>(_ payload: Payload, filename: String, schemaVersion: Int = 1) {
+    nonisolated static func save<Payload: Encodable & Sendable>(_ payload: Payload, filename: String, schemaVersion: Int = 1) {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
@@ -50,8 +50,7 @@ enum JSONFileStore {
             print("❌ [Locally] Failed to save \(filename): \(error.localizedDescription)")
         }
     }
-
-    nonisolated static func loadDecodable<Payload: Decodable>(_ type: Payload.Type, filename: String) -> Payload? {
-        load(type, filename: filename)
-    }
 }
+
+extension JSONFileStore.Envelope: Decodable where Payload: Decodable {}
+extension JSONFileStore.Envelope: Encodable where Payload: Encodable {}

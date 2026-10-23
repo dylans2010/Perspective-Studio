@@ -5,7 +5,7 @@ import Foundation
 /// backend — the MLX chat path in this app applies temperature and the system
 /// prompt today, so the UI labels the rest as "applied where supported"
 /// instead of pretending they change the engine.
-struct GenerationProfile: Codable, Identifiable, Sendable, Hashable {
+nonisolated struct GenerationProfile: Codable, Identifiable, Sendable, Hashable {
     var id: UUID = UUID()
     var name: String
     /// `nil` means the profile applies to any model.
@@ -26,7 +26,7 @@ struct GenerationProfile: Codable, Identifiable, Sendable, Hashable {
 
 /// One measured benchmark run. All metrics come from a real generation via
 /// `InferenceBackend` — estimates are never written into this store.
-struct BenchmarkResult: Codable, Identifiable, Sendable {
+nonisolated struct BenchmarkResult: Codable, Identifiable, Sendable {
     var id: UUID = UUID()
     var date: Date = .now
     var modelID: String

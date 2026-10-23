@@ -50,7 +50,7 @@ struct RoutingDecision: Sendable {
 /// simply scores low, and when nothing fits, it falls back to the smallest
 /// complete model and says so.
 enum ModelRouter {
-    private static let overrideKeyPrefix = "routingOverride."
+    nonisolated private static let overrideKeyPrefix = "routingOverride."
 
     nonisolated static func manualOverride(for task: RoutingTask) -> String? {
         UserDefaults.standard.string(forKey: overrideKeyPrefix + task.rawValue)

@@ -1,6 +1,6 @@
 import Foundation
 
-struct PromptTemplate: Codable, Identifiable, Sendable, Hashable {
+nonisolated struct PromptTemplate: Codable, Identifiable, Sendable, Hashable {
     var id: UUID = UUID()
     var title: String
     var body: String

@@ -7,16 +7,6 @@ extension Notification.Name {
     static let locallyQuickChat = Notification.Name("locallyQuickChat")
 }
 
-/// C-convention hotkey callback: posts a notification and nothing else.
-private func locallyQuickChatHotKeyHandler(
-    nextHandler: EventHandlerCallRef?,
-    event: EventRef?,
-    userData: UnsafeMutableRawPointer?
-) -> OSStatus {
-    NotificationCenter.default.post(name: .locallyQuickChat, object: nil)
-    return noErr
-}
-
 /// Registers the system-wide ⇧⌘L global hotkey (feature M) while the app is
 /// running, via Carbon's `RegisterEventHotKey` — the supported way to get a
 /// global shortcut on macOS without accessibility permissions.
@@ -39,7 +29,10 @@ final class LocallyAppDelegate: NSObject, NSApplicationDelegate {
         )
         InstallEventHandler(
             GetApplicationEventTarget(),
-            locallyQuickChatHotKeyHandler,
+            { _, _, _ in
+                NotificationCenter.default.post(name: .locallyQuickChat, object: nil)
+                return noErr
+            },
             1,
             &eventSpec,
             nil,

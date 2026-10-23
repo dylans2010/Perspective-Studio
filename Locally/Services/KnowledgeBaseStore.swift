@@ -2,13 +2,13 @@ import Foundation
 import PDFKit
 
 /// File types the knowledge base can extract text from (PDF + plain-text formats).
-private let kbSupportedExtensions: Set<String> = [
+nonisolated private let kbSupportedExtensions: Set<String> = [
     "pdf", "md", "markdown", "txt", "text",
     "swift", "ts", "tsx", "js", "jsx", "py", "rs", "go", "java", "c", "h",
     "cpp", "hpp", "cs", "rb", "php", "json", "yaml", "yml", "toml", "xml", "html", "css",
 ]
 
-struct KBDocument: Codable, Identifiable, Sendable {
+nonisolated struct KBDocument: Codable, Identifiable, Sendable {
     var id: UUID = UUID()
     var title: String
     var sourcePath: String
@@ -17,7 +17,7 @@ struct KBDocument: Codable, Identifiable, Sendable {
     var characterCount: Int = 0
 }
 
-struct KBChunk: Codable, Identifiable, Sendable {
+nonisolated struct KBChunk: Codable, Identifiable, Sendable {
     var id: UUID = UUID()
     var documentID: UUID
     var index: Int
@@ -25,7 +25,7 @@ struct KBChunk: Codable, Identifiable, Sendable {
 }
 
 /// A retrieved passage with the citation the UI / prompt must show.
-struct KBPassage: Identifiable, Sendable {
+nonisolated struct KBPassage: Identifiable, Sendable {
     var id: UUID { chunk.id }
     let chunk: KBChunk
     let documentTitle: String

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import SwiftData
 
 /// Prompt library + generation profiles (feature F).
 struct PromptLibraryView: View {

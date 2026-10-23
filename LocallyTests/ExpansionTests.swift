@@ -5,6 +5,7 @@ import XCTest
 /// round-trip, knowledge-base chunking/retrieval, the tool expression parser,
 /// tool-call parsing, and routing. These intentionally avoid the network and
 /// the MLX engine so they can run anywhere the app builds.
+@MainActor
 final class ExpansionTests: XCTestCase {
 
     // MARK: - Download validation

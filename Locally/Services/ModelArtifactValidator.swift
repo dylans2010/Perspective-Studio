@@ -128,7 +128,7 @@ enum HubDownloadMetadata {
 /// One file of a Hugging Face repository, as reported by the repo tree API
 /// (`GET /api/models/{id}/tree/main?recursive=true`). The models API itself only
 /// returns file names in `siblings` — sizes and etags exist only here.
-struct HFRepoFile: Codable, Sendable, Hashable {
+nonisolated struct HFRepoFile: Codable, Sendable, Hashable {
     /// Path inside the repository, e.g. `model-00001-of-00002.safetensors`.
     let path: String
     /// Exact byte size reported by Hugging Face.
@@ -146,7 +146,7 @@ struct HFRepoFile: Codable, Sendable, Hashable {
 /// completeness can be re-validated offline, byte for byte. It deliberately
 /// lives **outside** the model directory: `HubApi`'s offline validation
 /// rejects any file in that directory that has no `.metadata` record.
-struct HFModelManifest: Codable, Sendable {
+nonisolated struct HFModelManifest: Codable, Sendable {
     let modelID: String
     /// Commit SHA of the downloaded revision.
     let revision: String
@@ -180,7 +180,7 @@ struct HFModelManifest: Codable, Sendable {
 }
 
 /// Result of checking whether a model on disk is actually complete and loadable.
-struct ModelValidationResult: Sendable {
+nonisolated struct ModelValidationResult: Sendable {
     let modelID: String
     /// True only when every required file is present with the expected size
     /// and the Hub metadata the engine's offline mode demands.
@@ -329,7 +329,7 @@ enum ModelArtifactValidator {
         validate(modelID: modelID).isComplete
     }
 
-    private struct SafetensorsIndex: Decodable {
+    nonisolated private struct SafetensorsIndex: Decodable, Sendable {
         let weightMap: [String: String]
         enum CodingKeys: String, CodingKey { case weightMap = "weight_map" }
     }

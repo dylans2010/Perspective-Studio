@@ -146,7 +146,7 @@ final class ToolRegistry {
             let textExtensions: Set<String> = ["txt", "md", "swift", "json", "csv", "log", "py", "ts", "js", "html", "xml", "yaml", "yml"]
             for folder in folders {
                 guard let enumerator = fm.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) else { continue }
-                for case let fileURL as URL in enumerator {
+                while let fileURL = enumerator.nextObject() as? URL {
                     if matches.count >= 20 || scanned >= 500 { break }
                     scanned += 1
                     if fileURL.lastPathComponent.lowercased().contains(needle) {
@@ -292,7 +292,7 @@ enum ArithmeticExpression {
         mutating func parseUnary() throws -> Double {
             if !atEnd && tokens[position] == .minus {
                 position += 1
-                return -try parseUnary()
+                return -(try parseUnary())
             }
             return try parsePrimary()
         }

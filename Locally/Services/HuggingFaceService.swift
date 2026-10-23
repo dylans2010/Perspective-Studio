@@ -223,7 +223,7 @@ enum HFError: LocalizedError {
     }
 }
 
-private struct HFModelResponse: Decodable, Sendable {
+nonisolated private struct HFModelResponse: Decodable, Sendable {
     let id: String
     let downloads: Int?
     let likes: Int?
@@ -262,7 +262,7 @@ private struct HFModelResponse: Decodable, Sendable {
 }
 
 /// Detailed, real metadata for one Hugging Face repository.
-struct HFModelDetails: Sendable {
+nonisolated struct HFModelDetails: Sendable {
     let id: String
     let revision: String
     let license: String?
@@ -279,7 +279,7 @@ struct HFModelDetails: Sendable {
     }
 }
 
-private struct HFModelInfoResponse: Decodable {
+nonisolated private struct HFModelInfoResponse: Decodable, Sendable {
     let id: String
     let sha: String
     let downloads: Int?
@@ -288,7 +288,7 @@ private struct HFModelInfoResponse: Decodable {
     let tags: [String]
     let cardData: CardData?
 
-    struct CardData: Decodable {
+    nonisolated struct CardData: Decodable, Sendable {
         let license: String?
     }
 
