@@ -52,13 +52,13 @@ public enum AntigravitySDKBundle {
         }
     }
 
-    private struct Manifest: Decodable {
+    private nonisolated struct Manifest: Decodable, Sendable {
         var sdk: String
         var version: String
         var files: [ManifestFile]
     }
 
-    private struct ManifestFile: Decodable {
+    private nonisolated struct ManifestFile: Decodable, Sendable {
         var path: String
         var sha256: String
         var bytes: Int

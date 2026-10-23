@@ -84,7 +84,7 @@ struct AgentProjectsSettingsView: View {
                         .foregroundStyle(.white)
                     Text(project.rootPath)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(project.folderExists ? .secondary : .red)
+                        .foregroundStyle(project.folderExists ? Color.secondary : Color.red)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if !project.folderExists {

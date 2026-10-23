@@ -83,7 +83,7 @@ public enum AntigravityLoopEngine {
 
 /// A minimal type-erased codable value so loop decisions can carry tool
 /// arguments without leaking `[String: Any]` through the SDK surface.
-public enum AnyCodableValue: Sendable, Equatable {
+public nonisolated enum AnyCodableValue: Sendable, Equatable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -91,7 +91,7 @@ public enum AnyCodableValue: Sendable, Equatable {
     case array([AnyCodableValue])
     case object([String: AnyCodableValue])
 
-    public init(any value: Any) {
+    public nonisolated init(any value: Any) {
         switch value {
         case let string as String:
             self = .string(string)
@@ -111,7 +111,7 @@ public enum AnyCodableValue: Sendable, Equatable {
     }
 
     /// Back to the untyped dictionary value `ToolsRegistry` executes with.
-    public var anyValue: Any {
+    public nonisolated var anyValue: Any {
         switch self {
         case .string(let value): return value
         case .number(let value): return value

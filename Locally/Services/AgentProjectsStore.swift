@@ -24,7 +24,7 @@ public final class AgentProjectsStore {
 
     /// The envelope persisted to disk: projects plus the selection, one
     /// file so the two can never disagree.
-    private struct PersistedState: Codable, Sendable {
+    private nonisolated struct PersistedState: Codable, Sendable {
         var projects: [AgentProject]
         var selectedProjectID: UUID?
     }
