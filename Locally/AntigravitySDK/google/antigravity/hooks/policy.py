@@ -25,7 +25,7 @@ Within each priority group, first match wins, enabling short-circuit evaluation.
 
 Default Behavior:
 
-  ``LocalAgentConfig`` uses ``confirm_run_command()`` as its default policy.
+  Upstream's local agent config used ``confirm_run_command()`` as its default policy.
   This denies ``run_command`` (the most dangerous tool) while allowing all
   other tools.  To enable autonomous shell access, explicitly pass
   ``policies=[policy.allow_all()]``.
@@ -504,7 +504,7 @@ def confirm_run_command(
   All other tools (file read/write, subagents, image generation, etc.)
   are allowed.
 
-  This is the default policy for ``LocalAgentConfig``.
+  This was the default policy for upstream's local agent config.
 
   Args:
     handler: Optional handler for ASK_USER on run_command. If None, run_command
@@ -582,7 +582,7 @@ def auto(
     name: Human-readable label for logging.
     handler: Optional AskUserHandler invoked when auto policy mode flags a tool
       call. If None, flagged tool calls are denied.
-    model: Optional Gemini model name used for safety evaluation. If None, the
+    model: Optional model name used for safety evaluation. If None, the
       runtime's default safety assessment model configuration is used.
 
   Returns:

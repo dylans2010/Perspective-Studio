@@ -14,8 +14,12 @@ import FoundationModels
 @available(macOS 26.0, *)
 @MainActor
 enum FoundationModelAgentRunner {
-    /// A deliberately small tool set: the on-device model has a ~4K-token
-    /// window, so every extra tool schema costs room for the actual task.
+    /// Candidate base pool for the scored selection below. The on-device
+    /// model has a ~4K-token window, so every offered native tool costs
+    /// instruction tokens: a run no longer offers this whole pool — it
+    /// offers the core retrieval tools plus the pool members the local
+    /// index scores as relevant to the run's prompt, capped at
+    /// `maxOfferedTools` in total.
     static let offeredToolIDs = [
         "calculator",
         "date_time",
@@ -28,12 +32,14 @@ enum FoundationModelAgentRunner {
         "tree_view"
     ]
 
-    /// Computer Use tools offered to the on-device model when the user
-    /// has turned Computer Use on — a curated subset (observe, act,
-    /// verify) sized for the small context window. The MLX path through
-    /// the Antigravity loop offers the full suite; this subset is what
-    /// makes Computer Use *reachable at all* on the Apple-model path,
-    /// where it previously was not offered in any form.
+    /// Computer Use candidate subset for the on-device model when the
+    /// user has turned Computer Use on (observe, act, verify), sized for
+    /// the small context window. These join the scored candidate pool —
+    /// they are offered only when the index scores them relevant to the
+    /// run's prompt, and never at all while Computer Use is off. The MLX
+    /// path through the Antigravity loop offers the full suite; this
+    /// subset is what makes Computer Use *reachable at all* on the
+    /// Apple-model path, where it previously was not offered in any form.
     static let computerUseToolIDs = [
         "computer_get_permissions",
         "computer_screenshot",
@@ -47,25 +53,69 @@ enum FoundationModelAgentRunner {
         "computer_verify_state"
     ]
 
-    /// The tools one run actually offers: the base set, plus the context
-    /// index search unconditionally (the model must always be able to
-    /// retrieve index entries — schemas, assets, skills, memory — on
-    /// demand, since prompts no longer carry them), plus the project
-    /// memory tool whenever a project is active (project runs must be
-    /// able to read/write project memory), plus the Computer Use subset
-    /// when Computer Use is enabled.
-    static func runToolIDs(projectID: UUID?, computerUseEnabled: Bool) -> [String] {
-        var ids = offeredToolIDs
-        if !ids.contains("context_index_search") {
-            ids.append("context_index_search")
+    /// Hard cap on the tools one run offers the on-device model,
+    /// core tools included. On a ~4K-token window, a fixed dozen-plus
+    /// tool schemas crowded out the task itself; the scored selection
+    /// keeps the total at or below this cap.
+    static let maxOfferedTools = 12
+
+    /// The tools one run actually offers, query-scored by the context
+    /// index. Always offered: the core retrieval tools
+    /// (`context_index_search`, `system_asset_lookup`) — the model must
+    /// always be able to retrieve index entries on demand, since prompts
+    /// no longer carry them. With a project active, `project_memory`
+    /// (project runs must be able to read/write project memory) and
+    /// `tree_view` (the Project Tool Mandate's grounding exploration)
+    /// are always offered too, regardless of score. The remaining slots
+    /// go to the candidate pool (`offeredToolIDs`, plus the Computer Use
+    /// subset when Computer Use is enabled) scored against the run's
+    /// prompt: score descending, index order breaking ties, zero-score
+    /// candidates not offered.
+    static func runToolIDs(query: String = "", projectID: UUID?, computerUseEnabled: Bool) -> [String] {
+        let toolEntries = ContextIndexManager.liveEntries(mode: .agent).filter { $0.kind == .tool }
+        return selectToolIDs(
+            query: query,
+            toolEntries: toolEntries,
+            projectActive: projectID != nil,
+            computerUseEnabled: computerUseEnabled
+        )
+    }
+
+    /// The pure selection behind `runToolIDs` — deterministic, and
+    /// testable over fixture entries: mandatory tools first (fixed
+    /// order), then scored candidates until `maxOfferedTools` is hit.
+    static func selectToolIDs(
+        query: String,
+        toolEntries: [ContextIndexManager.Entry],
+        projectActive: Bool,
+        computerUseEnabled: Bool
+    ) -> [String] {
+        var selected: [String] = ["context_index_search", "system_asset_lookup"]
+        if projectActive {
+            for id in ["project_memory", "tree_view"] where !selected.contains(id) {
+                selected.append(id)
+            }
         }
-        if projectID != nil && !ids.contains("project_memory") {
-            ids.append("project_memory")
-        }
+
+        var candidateIDs = offeredToolIDs
         if computerUseEnabled {
-            ids += computerUseToolIDs.filter { !ids.contains($0) }
+            candidateIDs += computerUseToolIDs
         }
-        return ids
+
+        let queryTokens = ContextIndexManager.tokenize(query)
+        let scored: [(id: String, score: Int, order: Int)] = candidateIDs.compactMap { id in
+            guard !selected.contains(id),
+                  let entry = toolEntries.first(where: { $0.id == "tool:\(id)" }) else { return nil }
+            let score = ContextIndexManager.score(entry: entry, queryTokens: queryTokens)
+            return score > 0 ? (id: id, score: score, order: entry.order) : nil
+        }
+        .sorted { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }
+
+        for candidate in scored {
+            if selected.count >= maxOfferedTools { break }
+            selected.append(candidate.id)
+        }
+        return selected
     }
 
     static func run(
@@ -101,7 +151,7 @@ enum FoundationModelAgentRunner {
             toolEventsContinuation.yield(event)
         }
 
-        let runToolIDs = Self.runToolIDs(projectID: projectID, computerUseEnabled: ComputerUseSettings.isEnabled)
+        let runToolIDs = Self.runToolIDs(query: prompt, projectID: projectID, computerUseEnabled: ComputerUseSettings.isEnabled)
         let bridges: [any Tool] = runToolIDs.compactMap { toolID in
             guard let tool = registry.tool(for: toolID) else { return nil }
             return try? AssistToolBridge(tool: tool, context: context, onEvent: bridgeHandler)
@@ -285,6 +335,7 @@ enum FoundationModelAgentRunner {
         // demand through the offered lookup tools.
         let directory = ContextIndexManager.directoryText(mode: .agent)
         let sdkLine = AntigravitySDKBundle.agentModeContextLine(status: AntigravitySDKBundle.status())
+        let indexLine = "Models, tools, and system prompts here are Locally's own, served from the local context index — the bundled SDK provides only the agent-loop design, never models, tools, or prompts."
         let computerLine = ComputerUseSettings.isEnabled
             ? "Computer Use is ON and its desktop tools are among the tools offered to you: observe the screen first, act once, then verify."
             : "Computer Use is OFF; no desktop tools are offered in this run."
@@ -295,6 +346,7 @@ enum FoundationModelAgentRunner {
         You are an autonomous assistant running privately on this Mac with Apple Intelligence.
         You have these tools: \(toolNames.joined(separator: ", ")).
         \(sdkLine)
+        \(indexLine)
         \(computerLine)
 
         ## How to work

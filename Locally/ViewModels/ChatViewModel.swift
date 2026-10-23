@@ -399,7 +399,8 @@ final class ChatViewModel {
                         indexDirectory: ContextIndexManager.directoryText(
                             mode: .chat,
                             globalCustomPrompt: globalPrompt,
-                            conversationCustomPrompt: conversationPrompt
+                            conversationCustomPrompt: conversationPrompt,
+                            activeSkillIDs: activeSkillIDs
                         ),
                         retrievedContext: ContextIndexManager.retrievedBundle(
                             query: lastUserContent,
@@ -502,27 +503,29 @@ final class ChatViewModel {
         let project = AgentProjectsStore.shared.activeProject
         let projectContext = project.map { AgentProjectsStore.shared.contextBlock(for: $0) }
 
-        // The harness adds the retrieved tool schemas + directory itself;
-        // what it never received before — and why Agent mode also claimed
-        // to have no custom prompt and no skills — is everything assembled
-        // here from the context index: the directory, the retrieved
-        // excerpts for this prompt (custom-prompt chunks, skill excerpts,
-        // asset summaries, project memory), and the <thinking> format
-        // instruction. Tool schemas are excluded from this bundle
+        // The harness adds the retrieved tool schemas itself; what it
+        // never received before — and why Agent mode also claimed to
+        // have no custom prompt and no skills — is everything assembled
+        // here from the context index: the retrieved excerpts for this
+        // prompt (custom-prompt chunks, skill excerpts, asset summaries,
+        // project memory), and the <thinking> format instruction. Tool
+        // schemas are excluded from this bundle
         // (includeToolSchemas: false) because the harness adds its own
         // retrieved set — the model never pays for the same schema twice,
         // and the Foundation-model runner gets its schemas natively.
+        //
+        // The directory is deliberately NOT included here: the harness
+        // (MLX loop) and the Foundation-model runner each add the
+        // counts-only directory to the final prompt themselves, so it
+        // appears exactly once per prompt — carrying it in this
+        // additional prompt as well made every Agent prompt pay for it
+        // twice.
         let globalPrompt = UserDefaults.standard.string(forKey: "customSystemPrompt") ?? ""
         let conversationPrompt = conversation.systemPrompt ?? ""
         let agentContextPrompt = ModelContextBuilder.build(
             ModelContextBuilder.Input(
                 isAgentMode: true,
-                indexDirectory: ContextIndexManager.directoryText(
-                    mode: .agent,
-                    globalCustomPrompt: globalPrompt,
-                    conversationCustomPrompt: conversationPrompt,
-                    project: project
-                ),
+                indexDirectory: "",
                 retrievedContext: ContextIndexManager.retrievedBundle(
                     query: userPrompt,
                     mode: .agent,

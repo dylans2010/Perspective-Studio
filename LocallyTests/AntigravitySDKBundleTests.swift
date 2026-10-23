@@ -116,6 +116,12 @@ final class AntigravitySDKBundleTests: XCTestCase {
         let line = AntigravitySDKBundle.agentModeContextLine(status: usable)
         XCTAssertTrue(line.contains("0.1.20"), line)
         XCTAssertTrue(line.contains("integrity-verified"), line)
+        // The line must not imply the SDK provides models/tools/prompts:
+        // it provides the agent-loop design only, and models, tools, and
+        // system prompts are Locally's own, from the context index.
+        XCTAssertTrue(line.contains("agent-loop design only"), line)
+        XCTAssertTrue(line.contains("Locally's own"), line)
+        XCTAssertTrue(line.contains("context index"), line)
 
         let missing = AntigravitySDKBundle.agentModeContextLine(status: .init(isBundled: false))
         XCTAssertTrue(missing.contains("MISSING"), missing)

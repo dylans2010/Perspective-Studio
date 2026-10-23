@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Google Antigravity SDK for building AI agents."""
+"""Google Antigravity SDK for building AI agents.
+
+Vendored in Locally under the loop-only strip: the model layer, the
+model connections, and their config classes were removed — models,
+tools, and system prompts are Locally's own. What remains exported
+here is the agent loop and its boundary types.
+"""
 
 from google.antigravity.agent import Agent
 from google.antigravity.connections.connection import AgentConfig
-from google.antigravity.connections.local.litert_connection_config import LiteRTAgentConfig
-from google.antigravity.connections.local.litert_connection_config import LiteRTBackend
-from google.antigravity.connections.local.local_connection_config import LocalAgentConfig
-from google.antigravity.connections.local.local_openai_connection_config import LocalOpenAIAgentConfig
 from google.antigravity.tools.tool_context import ToolContext
 from google.antigravity.types import AgentBehavior
 from google.antigravity.types import Audio
@@ -31,35 +33,23 @@ from google.antigravity.types import CustomSystemInstructions
 from google.antigravity.types import Document
 from google.antigravity.types import from_bytes
 from google.antigravity.types import from_file
-from google.antigravity.types import GeminiAPIEndpoint
-from google.antigravity.types import GeminiModelOptions
 from google.antigravity.types import Image
 from google.antigravity.types import ModelAPIRetryConfig
-from google.antigravity.types import ModelEndpoint
 from google.antigravity.types import ModelOutputRetryConfig
-from google.antigravity.types import ModelTarget
-from google.antigravity.types import ModelType
 from google.antigravity.types import RetryConfig
 from google.antigravity.types import SandboxStatus
-from google.antigravity.types import ServiceTier
 from google.antigravity.types import SystemInstructions
 from google.antigravity.types import SystemInstructionSection
 from google.antigravity.types import TemplatedSystemInstructions
-from google.antigravity.types import ThinkingLevel
 from google.antigravity.types import ToolExecutionError
 from google.antigravity.types import ToolOutputTruncationConfig
 from google.antigravity.types import UsageMetadata
-from google.antigravity.types import VertexEndpoint
 from google.antigravity.types import Video
 
 __all__ = [
     "Agent",
     "AgentConfig",
-    "LocalAgentConfig",
-    "LiteRTAgentConfig",
-    "LiteRTBackend",
-    "LocalOpenAIAgentConfig",
-    "ToolContext",
+                    "ToolContext",
     "AgentBehavior",
     "Audio",
     "BuiltinTools",
@@ -68,25 +58,17 @@ __all__ = [
     "Content",
     "CustomSystemInstructions",
     "Document",
-    "GeminiAPIEndpoint",
-    "GeminiModelOptions",
-    "Image",
+            "Image",
     "ModelAPIRetryConfig",
-    "ModelEndpoint",
-    "ModelOutputRetryConfig",
-    "ModelTarget",
-    "ModelType",
-    "RetryConfig",
+        "ModelOutputRetryConfig",
+            "RetryConfig",
     "SandboxStatus",
-    "ServiceTier",
-    "SystemInstructions",
+        "SystemInstructions",
     "SystemInstructionSection",
     "TemplatedSystemInstructions",
-    "ThinkingLevel",
-    "ToolOutputTruncationConfig",
+        "ToolOutputTruncationConfig",
     "UsageMetadata",
-    "VertexEndpoint",
-    "Video",
+        "Video",
     "ToolExecutionError",
     "from_bytes",
     "from_file",

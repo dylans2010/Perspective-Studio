@@ -28,6 +28,15 @@ import Foundation
 /// refuses to create memory entries for Chat mode no matter what the
 /// caller passes, and the bundle renderer drops them again defensively.
 ///
+/// The index itself is cheap to consult: entries precompute their token
+/// sets once at build time (scoring never re-tokenizes payloads), and the
+/// live index is cached behind a cheap input fingerprint
+/// (`ContextIndexCache`) — repeated calls in one request reuse the built
+/// entries instead of re-rendering every tool schema and re-fetching
+/// every asset. Every model path (MLX and the Apple model, Chat, Agent,
+/// and Quick Chat) goes through the same cached index, so the token
+/// savings apply everywhere equally.
+///
 /// The scoring/selection/rendering core is pure and static, over value-type
 /// entries, exactly like `ModelContextBuilder`; the `@MainActor`
 /// convenience methods at the bottom gather the live values.
@@ -85,6 +94,19 @@ public enum ContextIndexManager {
         public var isActiveSkill: Bool
         /// Stable position in the index — the deterministic tie-breaker.
         public var order: Int
+        /// Token sets computed ONCE, here at index build. Scoring reads
+        /// these sets; it never re-tokenizes an entry's title, keywords,
+        /// description, or (potentially very large) payload per query —
+        /// that per-call re-tokenization was the index's main CPU cost.
+        public var preparedTokens: PreparedTokens
+
+        /// The precomputed token sets `score(entry:queryTokens:)` reads.
+        public struct PreparedTokens: Sendable, Equatable {
+            public var title: Set<String>
+            public var keywords: Set<String>
+            public var description: Set<String>
+            public var payload: Set<String>
+        }
 
         public init(
             id: String,
@@ -108,6 +130,12 @@ public enum ContextIndexManager {
             self.isCoreTool = isCoreTool
             self.isActiveSkill = isActiveSkill
             self.order = order
+            self.preparedTokens = PreparedTokens(
+                title: Set(ContextIndexManager.tokenize(title)),
+                keywords: Set(keywords.flatMap { ContextIndexManager.tokenize($0) }),
+                description: Set(ContextIndexManager.tokenize(description)),
+                payload: Set(ContextIndexManager.tokenize(payload))
+            )
         }
     }
 
@@ -194,16 +222,15 @@ public enum ContextIndexManager {
         if entry.kind == .skill && entry.isActiveSkill { total += 300 }
         guard !queryTokens.isEmpty else { return total }
 
-        let titleTokens = Set(tokenize(entry.title))
-        let keywordTokens = Set(entry.keywords.flatMap { tokenize($0) })
-        let descriptionTokens = Set(tokenize(entry.description))
-        let payloadTokens = Set(tokenize(entry.payload))
+        // Precomputed at index build — scoring is pure set lookups, so
+        // consulting the index costs almost nothing per request.
+        let prepared = entry.preparedTokens
         var payloadHits = 0
         for token in queryTokens {
-            if titleTokens.contains(token) { total += 10 }
-            if keywordTokens.contains(token) { total += 6 }
-            if descriptionTokens.contains(token) { total += 3 }
-            if payloadTokens.contains(token) { payloadHits += 1 }
+            if prepared.title.contains(token) { total += 10 }
+            if prepared.keywords.contains(token) { total += 6 }
+            if prepared.description.contains(token) { total += 3 }
+            if prepared.payload.contains(token) { payloadHits += 1 }
         }
         // Payload evidence is weak and capped, so a long document cannot
         // outrank a title/keyword match just by mentioning everything.
@@ -635,9 +662,15 @@ public enum ContextIndexManager {
 
 extension ContextIndexManager {
 
-    /// Builds the index from the live registries/managers. In Chat mode
-    /// the active project is deliberately NOT consulted — memory entries
-    /// cannot enter a Chat index.
+    /// Builds the index from the live registries/managers — through the
+    /// `ContextIndexCache`, so the expensive build (rendering every
+    /// tool's schema text, fetching every asset's content, tokenizing
+    /// every payload) happens only when a cheap fingerprint of the
+    /// inputs changes. One request typically asks for the index several
+    /// times (directory + bundle, sometimes on two prompt paths); with
+    /// unchanged inputs those are all the same cached build. In Chat
+    /// mode the active project is deliberately NOT consulted — memory
+    /// entries cannot enter a Chat index.
     @MainActor
     public static func liveEntries(
         mode: Mode,
@@ -646,28 +679,37 @@ extension ContextIndexManager {
         activeSkillIDs: Set<String> = [],
         project: AgentProject? = nil
     ) -> [Entry] {
-        let effectiveProject = mode == .agent ? (project ?? AgentProjectsStore.shared.activeProject) : nil
-        // Asset payloads are fetched here, on the main actor, so the
-        // closure handed to the pure builder captures only a Sendable
-        // dictionary — never the (main-actor) assets manager itself.
-        let descriptors = SystemAssetsManager.shared.availableAssets()
-        var assetContents: [String: String] = [:]
-        for descriptor in descriptors {
-            if let content = SystemAssetsManager.shared.fetchAssetContent(named: descriptor.id) {
-                assetContents[descriptor.id] = content
-            }
-        }
-        return buildIndex(
-            tools: ToolsRegistry.shared.allTools,
-            assets: descriptors,
-            assetContent: { assetContents[$0] },
-            skills: SkillsManager.shared.skills,
-            activeSkillIDs: activeSkillIDs,
+        let fingerprint = ContextIndexCache.liveFingerprint(
+            mode: mode,
             globalCustomPrompt: globalCustomPrompt,
             conversationCustomPrompt: conversationCustomPrompt,
-            project: effectiveProject,
-            mode: mode
+            activeSkillIDs: activeSkillIDs,
+            project: project
         )
+        return ContextIndexCache.shared.entries(fingerprint: fingerprint) {
+            let effectiveProject = mode == .agent ? (project ?? AgentProjectsStore.shared.activeProject) : nil
+            // Asset payloads are fetched here, on the main actor, so the
+            // closure handed to the pure builder captures only a Sendable
+            // dictionary — never the (main-actor) assets manager itself.
+            let descriptors = SystemAssetsManager.shared.availableAssets()
+            var assetContents: [String: String] = [:]
+            for descriptor in descriptors {
+                if let content = SystemAssetsManager.shared.fetchAssetContent(named: descriptor.id) {
+                    assetContents[descriptor.id] = content
+                }
+            }
+            return buildIndex(
+                tools: ToolsRegistry.shared.allTools,
+                assets: descriptors,
+                assetContent: { assetContents[$0] },
+                skills: SkillsManager.shared.skills,
+                activeSkillIDs: activeSkillIDs,
+                globalCustomPrompt: globalCustomPrompt,
+                conversationCustomPrompt: conversationCustomPrompt,
+                project: effectiveProject,
+                mode: mode
+            )
+        }
     }
 
     @MainActor
@@ -675,10 +717,11 @@ extension ContextIndexManager {
         mode: Mode,
         globalCustomPrompt: String = "",
         conversationCustomPrompt: String = "",
+        activeSkillIDs: Set<String> = [],
         project: AgentProject? = nil
     ) -> String {
         directoryText(
-            entries: liveEntries(mode: mode, globalCustomPrompt: globalCustomPrompt, conversationCustomPrompt: conversationCustomPrompt, project: project),
+            entries: liveEntries(mode: mode, globalCustomPrompt: globalCustomPrompt, conversationCustomPrompt: conversationCustomPrompt, activeSkillIDs: activeSkillIDs, project: project),
             mode: mode
         )
     }

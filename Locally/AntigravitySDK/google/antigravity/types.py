@@ -32,26 +32,14 @@ import warnings
 
 import pydantic
 
-from google.antigravity.models import GeminiAPIEndpoint
-from google.antigravity.models import GeminiModelOptions
-from google.antigravity.models import ModelEndpoint
-from google.antigravity.models import ModelTarget
-from google.antigravity.models import ModelType
-from google.antigravity.models import ServiceTier
-from google.antigravity.models import ThinkingLevel
-from google.antigravity.models import VertexEndpoint
+# Locally strip: the model-layer imports (Gemini/Vertex endpoints,
+# model targets, thinking levels, service tiers) were removed with
+# models.py. Models are Locally's own; this module keeps only the
+# loop-facing boundary types.
 
 _BaseMediaT = TypeVar("_BaseMediaT", bound="_BaseMedia")
 
 __all__ = [
-    "ThinkingLevel",
-    "ServiceTier",
-    "ModelType",
-    "ModelEndpoint",
-    "GeminiAPIEndpoint",
-    "VertexEndpoint",
-    "GeminiModelOptions",
-    "ModelTarget",
     "SystemInstructionSection",
     "CustomSystemInstructions",
     "TemplatedSystemInstructions",
@@ -428,22 +416,6 @@ class BuiltinTools(str, enum.Enum):
     return []
 
   @classmethod
-  def minimal(cls) -> list["BuiltinTools"]:
-    """Returns the minimal set of software engineering tools.
-
-    Includes run_command, view_file, create_file, and edit_file.
-
-    Returns:
-        A list of minimal BuiltinTools.
-    """
-    return [
-        cls.RUN_COMMAND,
-        cls.VIEW_FILE,
-        cls.CREATE_FILE,
-        cls.EDIT_FILE,
-    ]
-
-  @classmethod
   def deprecated(cls) -> list["BuiltinTools"]:
     """Returns deprecated/legacy builtin tools that are disabled by default.
 
@@ -459,20 +431,6 @@ class BuiltinTools(str, enum.Enum):
         cls.SEARCH_DIR,
         cls.FIND_FILE,
     ]
-
-  @classmethod
-  def default(cls) -> list["BuiltinTools"]:
-    """Returns the default set of builtin tools for autonomous agents.
-
-    Excludes ASK_QUESTION (because autonomous agents cannot prompt the user) as
-    well as deprecated tools (LIST_DIR, SEARCH_DIR, and FIND_FILE, which are off
-    by default).
-
-    Returns:
-        A list of default BuiltinTools.
-    """
-    excluded = {cls.ASK_QUESTION, *cls.deprecated()}
-    return [t for t in cls if t not in excluded]
 
 
 class CapabilitiesConfig(pydantic.BaseModel):
@@ -896,7 +854,7 @@ class UsageMetadata(pydantic.BaseModel):
   total_token_count: int | None = None
 
   # Service tier.
-  service_tier: ServiceTier | None = None
+  service_tier: str | None = None
 
   def __add__(self, other: Any) -> UsageMetadata:
     """Adds token counts from another UsageMetadata or returns a copy for 0."""
@@ -914,7 +872,7 @@ class UsageMetadata(pydantic.BaseModel):
       merged_tier = self.service_tier or other.service_tier
     else:
       # When combining different service tiers, default to STANDARD.
-      merged_tier = ServiceTier.STANDARD
+      merged_tier = "standard"
     return self.__class__(
         prompt_token_count=(self.prompt_token_count or 0)
         + (other.prompt_token_count or 0),

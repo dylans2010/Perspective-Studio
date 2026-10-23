@@ -12,29 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Local connection package for the Google Antigravity SDK.
+"""Removed in Locally's loop-only strip.
 
-Re-exports the public API so that existing import paths like
-``from ...connections.local_connection import LocalAgentConfig``
-continue to work without changes.
+Upstream, this module contained re-exports of the local model-connection package (configs, connection, and built-in tool result types).
+
+Locally bundles the Antigravity SDK for its agent-loop design only:
+models, tool calling, and system prompts always come from Locally's own
+context index, never from Google — so this content was removed. The
+file remains (empty of code) so the vendored tree layout, the bundle
+manifest, and the build's file-count gate stay intact. See BUNDLED.md.
 """
-
-from google.antigravity.connections.local.event_processor import LocalConnectionStep
-from google.antigravity.connections.local.litert_connection_config import LiteRTAgentConfig
-from google.antigravity.connections.local.litert_connection_config import LiteRTBackend
-from google.antigravity.connections.local.local_connection import callable_to_tool_proto
-from google.antigravity.connections.local.local_connection import LocalConnection
-from google.antigravity.connections.local.local_connection import LocalConnectionStrategy
-from google.antigravity.connections.local.local_connection_config import LocalAgentConfig
-from google.antigravity.connections.local.local_openai_connection_config import LocalOpenAIAgentConfig
-from google.antigravity.connections.local.types import EditFileResult
-from google.antigravity.connections.local.types import FindFileResult
-from google.antigravity.connections.local.types import GenerateImageResult
-from google.antigravity.connections.local.types import ListDirectoryEntry
-from google.antigravity.connections.local.types import ListDirectoryResult
-from google.antigravity.connections.local.types import ReadUrlContentResult
-from google.antigravity.connections.local.types import RunCommandResult
-from google.antigravity.connections.local.types import SearchDirectoryResult
-from google.antigravity.connections.local.types import SearchWebResult
-from google.antigravity.connections.local.types import TextResult
-from google.antigravity.connections.local.types import ToolOutput

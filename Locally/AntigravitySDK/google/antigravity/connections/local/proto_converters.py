@@ -12,35 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utilities for converting between LocalHarness wire protobufs and SDK types."""
+"""Removed in Locally's loop-only strip.
 
-from google.antigravity.proto import localharness_pb2
-from google.antigravity import types
+Upstream, this module contained converters between SDK types and the localharness wire protos for model content.
 
-_STOP_REASON_MAP: dict[int, types.StopReason] = {
-    localharness_pb2.TrajectoryStateUpdate.StopReason.STOP_REASON_MAX_MODEL_CALLS_EXCEEDED: (
-        types.StopReason.MAX_MODEL_CALLS_EXCEEDED
-    ),
-    localharness_pb2.TrajectoryStateUpdate.StopReason.STOP_REASON_MAX_TOOL_CALLS_EXCEEDED: (
-        types.StopReason.MAX_TOOL_CALLS_EXCEEDED
-    ),
-    localharness_pb2.TrajectoryStateUpdate.StopReason.STOP_REASON_MAX_INPUT_TOKENS_EXCEEDED: (
-        types.StopReason.MAX_INPUT_TOKENS_EXCEEDED
-    ),
-    localharness_pb2.TrajectoryStateUpdate.StopReason.STOP_REASON_MAX_OUTPUT_TOKENS_EXCEEDED: (
-        types.StopReason.MAX_OUTPUT_TOKENS_EXCEEDED
-    ),
-    localharness_pb2.TrajectoryStateUpdate.StopReason.STOP_REASON_MAX_TOTAL_TOKENS_EXCEEDED: (
-        types.StopReason.MAX_TOTAL_TOKENS_EXCEEDED
-    ),
-    localharness_pb2.TrajectoryStateUpdate.StopReason.STOP_REASON_QUOTA_EXHAUSTED: (
-        types.StopReason.QUOTA_EXHAUSTED
-    ),
-}
-
-
-def _parse_stop_reason(
-    reason: localharness_pb2.TrajectoryStateUpdate.StopReason | int,
-) -> types.StopReason:
-  """Extracts StopReason SDK enum from a proto enum or integer."""
-  return _STOP_REASON_MAP.get(reason, types.StopReason.UNSPECIFIED)
+Locally bundles the Antigravity SDK for its agent-loop design only:
+models, tool calling, and system prompts always come from Locally's own
+context index, never from Google — so this content was removed. The
+file remains (empty of code) so the vendored tree layout, the bundle
+manifest, and the build's file-count gate stay intact. See BUNDLED.md.
+"""

@@ -320,7 +320,7 @@ public final class AntigravityAgentHarness {
             dispatchStatus(.thinking)
             currentThought = ""
 
-            let fullPrompt = assemblePrompt(turns: conversationTurns)
+            let fullPrompt = Self.assemblePrompt(turns: conversationTurns)
 
             var turnResponse = ""
             do {
@@ -555,10 +555,11 @@ public final class AntigravityAgentHarness {
             prompt += "\n\n" + AgentToolPolicy.projectMandate(projectName: projectName)
         }
 
-        // The caller's context — the index directory, the retrieved
-        // excerpts (custom-prompt chunks, skill excerpts, asset
-        // summaries, project memory), and the <thinking> format
-        // instruction assembled by ModelContextBuilder. Tool schemas are
+        // The caller's context — the retrieved excerpts (custom-prompt
+        // chunks, skill excerpts, asset summaries, project memory) and
+        // the <thinking> format instruction assembled by
+        // ModelContextBuilder. The directory is NOT in there: this
+        // prompt adds it above, so it appears exactly once. Tool schemas are
         // excluded there because this prompt adds its own retrieved set
         // above — the model never pays for the same schema twice.
         if let additionalSystemPrompt,
@@ -568,25 +569,69 @@ public final class AntigravityAgentHarness {
         return prompt
     }
 
-    private struct Turn {
+    struct Turn {
         let role: String
         let content: String
     }
 
-    private func assemblePrompt(turns: [Turn]) -> String {
-        var lines: [String] = []
-        for turn in turns {
-            switch turn.role {
-            case "user":
-                lines.append("User: \(turn.content)")
-            case "assistant":
-                lines.append("Assistant: \(turn.content)")
-            default:
-                lines.append("\(turn.role): \(turn.content)")
+    /// Total character budget for one assembled loop prompt. The system
+    /// prompt rides separately (the backend receives it as the session
+    /// system prompt, outside the turns), so this bounds the *history*
+    /// the model re-reads on every iteration: without a bound, a 10-turn
+    /// run re-prefilled the full transcript — every earlier tool output
+    /// in full — on every single turn, and the cost grew quadratically.
+    public static let maxAssembledPromptCharacters = 32_000
+    /// Older turns are kept only as excerpts of this length (plus the
+    /// truncation marker). The first turn (the user's objective) and the
+    /// current (most recent) turn are never truncated.
+    public static let truncatedHistoryTurnCharacterLimit = 600
+    /// Marker appended to a truncated older turn.
+    public static let historyTruncationMarker = "[earlier tool output truncated to save context]"
+
+    /// Assembles the loop prompt from the conversation turns, bounded:
+    /// the first turn and the most recent turn ride in full; older turns
+    /// are excerpted to `truncatedHistoryTurnCharacterLimit`; and if the
+    /// result still exceeds `maxAssembledPromptCharacters`, the oldest
+    /// middle turns are dropped (first + last two always survive) until
+    /// it fits. Loop semantics are unchanged — only the history's size
+    /// is bounded.
+    static func assemblePrompt(turns: [Turn]) -> String {
+        guard !turns.isEmpty else { return "Assistant:" }
+
+        func render(_ turns: [(role: String, content: String)]) -> String {
+            var lines: [String] = []
+            for turn in turns {
+                switch turn.role {
+                case "user":
+                    lines.append("User: \(turn.content)")
+                case "assistant":
+                    lines.append("Assistant: \(turn.content)")
+                default:
+                    lines.append("\(turn.role): \(turn.content)")
+                }
             }
+            lines.append("Assistant:")
+            return lines.joined(separator: "\n\n")
         }
-        lines.append("Assistant:")
-        return lines.joined(separator: "\n\n")
+
+        var bounded: [(role: String, content: String)] = turns.enumerated().map { index, turn in
+            let isFirst = index == 0
+            let isCurrent = index == turns.count - 1
+            guard !isFirst, !isCurrent, turn.content.count > truncatedHistoryTurnCharacterLimit else {
+                return (role: turn.role, content: turn.content)
+            }
+            return (
+                role: turn.role,
+                content: String(turn.content.prefix(truncatedHistoryTurnCharacterLimit)) + "\n" + historyTruncationMarker
+            )
+        }
+
+        var assembled = render(bounded)
+        while assembled.count > maxAssembledPromptCharacters, bounded.count > 3 {
+            bounded.remove(at: 1)
+            assembled = render(bounded)
+        }
+        return assembled
     }
 
     private func formatArgumentsPreview(_ args: [String: Any]) -> String {

@@ -67,6 +67,34 @@ final class ModelContextBuilderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("expression"))
     }
 
+    func testDirectoryAppearsExactlyOnceWhenProvided() {
+        // The dedupe contract: whoever assembles the final prompt owns
+        // the directory, and it is paid for exactly once.
+        let prompt = ModelContextBuilder.build(
+            ModelContextBuilder.Input(
+                isAgentMode: true,
+                indexDirectory: directoryFixture,
+                retrievedContext: ""
+            )
+        )
+        XCTAssertEqual(prompt.components(separatedBy: "[Context Directory]").count - 1, 1)
+    }
+
+    func testEmptyDirectoryAddsNoDirectorySection() {
+        // The Agent path passes an empty directory because the harness
+        // (MLX) and the Foundation runner add it to the final prompt
+        // themselves — the builder must not invent one.
+        let prompt = ModelContextBuilder.build(
+            ModelContextBuilder.Input(
+                isAgentMode: true,
+                indexDirectory: "",
+                retrievedContext: "[Retrieved Context]\nSOME-EXCERPT"
+            )
+        )
+        XCTAssertFalse(prompt.contains("[Context Directory]"))
+        XCTAssertTrue(prompt.contains("SOME-EXCERPT"))
+    }
+
     func testEmptyInputStillIdentifiesTheApp() {
         let prompt = ModelContextBuilder.build(ModelContextBuilder.Input())
         XCTAssertTrue(prompt.contains("Locally"))

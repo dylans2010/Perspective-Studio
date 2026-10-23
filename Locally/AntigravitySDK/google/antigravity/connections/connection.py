@@ -49,15 +49,16 @@ def resolve_active_tools(
 
   Args:
     cfg: A CapabilitiesConfig or SubagentCapabilities instance, or None.
-    defaults: Optional base set of default tools. When omitted, defaults to
-      `BuiltinTools.default()`.
+    defaults: Optional base set of default tools. When omitted, the
+      active set starts empty (Locally strip — no default bundle).
 
   Returns:
     A set of active BuiltinTools.
   """
-  default_set = set(
-      defaults if defaults is not None else types.BuiltinTools.default()
-  )
+  # Locally strip: there is no default builtin-tool bundle — with no
+  # explicit defaults and no config, the active set starts empty and
+  # the host decides which tools exist.
+  default_set = set(defaults) if defaults is not None else set()
   if cfg is not None:
     if cfg.enabled_tools is not None:
       return set(cfg.enabled_tools)
@@ -76,11 +77,11 @@ class AgentConfig(abc.ABC, pydantic.BaseModel):
 
   model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
 
-  system_instructions: str | types.SystemInstructions | None = None
+  # Locally strip: no system_instructions field. System prompts are
+  # Locally's own (built from its context index), never carried by the
+  # SDK's loop-facing config.
   capabilities: types.CapabilitiesConfig = pydantic.Field(
-      default_factory=lambda: types.CapabilitiesConfig(
-          enabled_tools=types.BuiltinTools.read_only()
-      )
+      default_factory=types.CapabilitiesConfig
   )
   tools: list[Callable[..., Any] | str] = pydantic.Field(default_factory=list)
   policies: list[policy.Policy] = pydantic.Field(default_factory=list)
@@ -258,207 +259,6 @@ class AgentConfig(abc.ABC, pydantic.BaseModel):
             seen_names[name] = tool
             tools.append(tool)
     return tools
-
-  @classmethod
-  def _default_compaction_config(cls) -> types.CompactionConfig | None:
-    """Returns the default compaction configuration for lightweight preset."""
-    return types.CompactionConfig(token_threshold=65536)
-
-  @classmethod
-  def _compute_lightweight_presets(
-      cls,
-      data: Mapping[str, Any] | None = None,
-  ) -> dict[str, Any]:
-    """Computes lightweight preset updates, preserving caller-provided overrides.
-
-    Args:
-      data: Optional mapping of field names to values that were explicitly
-        configured by the caller or present on the instance.
-
-    Returns:
-      A dictionary of field updates (e.g. 'capabilities', 'compaction_config')
-      with lightweight defaults applied.
-    """
-    data = data or {}
-    preset_kwargs = {
-        "enabled_tools": types.BuiltinTools.minimal(),
-        "agent_behavior": types.AgentBehavior.MINIMAL,
-        "enable_subagents": False,
-    }
-    user_caps = data.get("capabilities")
-    user_caps_dict = {}
-    if user_caps is not None:
-      user_caps_dict = (
-          user_caps.model_dump(exclude_unset=True)
-          if hasattr(user_caps, "model_dump")
-          else dict(user_caps)
-          if isinstance(user_caps, Mapping)
-          else {}
-      )
-      if (
-          "disabled_tools" in user_caps_dict
-          and "enabled_tools" not in user_caps_dict
-      ):
-        disabled = set(user_caps_dict.get("disabled_tools") or [])
-        preset_kwargs["enabled_tools"] = [
-            t for t in types.BuiltinTools.minimal() if t not in disabled
-        ]
-        user_caps_dict.pop("disabled_tools", None)
-      preset_kwargs.update(user_caps_dict)
-
-    updates: dict[str, Any] = {
-        "capabilities": types.CapabilitiesConfig(**preset_kwargs)
-    }
-
-    # Compaction preset is only applied if the caller has not explicitly
-    # configured a compaction policy:
-    # 1. Modern API: caller explicitly passed a non-None `compaction_config`
-    #    (tracked via `model_fields_set` or present in `data`).
-    # 2. Legacy API: caller explicitly configured compaction threshold via
-    #    `capabilities.compaction_threshold`.
-    has_explicit_compaction = (
-        data.get("compaction_config") is not None
-        or (user_caps_dict.get("compaction_threshold") is not None)
-    )
-    if not has_explicit_compaction:
-      default_compaction = cls._default_compaction_config()
-      if default_compaction is not None:
-        updates["compaction_config"] = default_compaction
-
-    return updates
-
-  def lightweight(self: Self) -> Self:
-    """Returns a copy of this configuration with lightweight presets applied."""
-    user_explicit = {
-        field: getattr(self, field)
-        for field in self.model_fields_set
-        if getattr(self, field) is not None
-    }
-    updates = self._compute_lightweight_presets(user_explicit)
-    return cast(Self, self.model_copy(update=updates))
-
-  def eval(
-      self: Self,
-      thinking_level: types.ThinkingLevel | None = types.ThinkingLevel.HIGH,
-  ) -> Self:
-    """Returns a copy of this configuration with evaluation presets applied.
-
-    Because the Antigravity SDK can be configured in many ways to power
-    different product surfaces, `.eval()` provides a standardized,
-    product-agnostic default intended to represent Gemini's core coding ability
-    on benchmarks and evaluation suites.
-
-    Specifically, `.eval()` configures the following defaults (while preserving
-    any fields explicitly set by the caller):
-      - Disables `BuiltinTools.GENERATE_IMAGE` (`disabled_tools`).
-      - Disables subagent spawning and orchestration (`enable_subagents=False`).
-      - Enables daemon command execution
-        (`run_command_config=RunCommandConfig(enable_daemons=True)`).
-      - Sets `policies=[policy.allow_all()]` for autonomous tool execution.
-      - Sets `retry_config=RetryConfig.benchmark()` for resilient API retries.
-      - Defaults `thinking_level` to `ThinkingLevel.HIGH` on text models (unless
-        overridden via `thinking_level` or disabled with `thinking_level=None`).
-
-    Args:
-      thinking_level: Thinking level to apply to text models. Defaults to
-        `ThinkingLevel.HIGH`. Pass `None` to leave existing model target
-        thinking levels unchanged.
-
-    Raises:
-      ValueError: If `thinking_level` is not `None` and the config has no text
-        Gemini/Vertex model targets, or if a text `ModelTarget` already sets
-        `thinking_level`.
-    """
-    run_cmd_kwargs: dict[str, Any] = {"enable_daemons": True}
-    preset_kwargs: dict[str, Any] = {
-        "disabled_tools": [types.BuiltinTools.GENERATE_IMAGE],
-        "enable_subagents": False,
-        "run_command_config": types.RunCommandConfig(**run_cmd_kwargs),
-    }
-    if (
-        "capabilities" in self.model_fields_set
-        and self.capabilities is not None
-    ):
-      user_capabilities = self.capabilities.model_dump(exclude_unset=True)
-      if "enabled_tools" in user_capabilities:
-        preset_kwargs.pop("disabled_tools", None)
-      if "run_command_config" in user_capabilities:
-        user_run_cmd = user_capabilities.pop("run_command_config")
-        if isinstance(user_run_cmd, dict):
-          run_cmd_kwargs.update(user_run_cmd)
-          preset_kwargs["run_command_config"] = types.RunCommandConfig(
-              **run_cmd_kwargs
-          )
-        elif user_run_cmd is not None:
-          preset_kwargs["run_command_config"] = user_run_cmd
-      preset_kwargs.update(user_capabilities)
-
-    updates: dict[str, Any] = {
-        "capabilities": types.CapabilitiesConfig(**preset_kwargs),
-    }
-    if "policies" not in self.model_fields_set:
-      updates["policies"] = [policy.allow_all()]
-    if "retry_config" not in self.model_fields_set:
-      updates["retry_config"] = types.RetryConfig.benchmark()
-
-    if thinking_level is not None:
-      models = getattr(self, "models", None)
-      if not models:
-        raise ValueError(
-            f"Cannot apply thinking_level in eval() on {type(self).__name__}:"
-            " thinking_level is only supported on configs with Gemini or"
-            " Vertex model targets (pass thinking_level=None to disable)."
-        )
-      text_targets = [t for t in models if types.ModelType.TEXT in t.types]
-      if not text_targets:
-        raise ValueError(
-            "Cannot apply thinking_level in eval(): no ModelType.TEXT target"
-            " found in models."
-        )
-      def _with_thinking_level(target: types.ModelTarget) -> types.ModelTarget:
-        target_copy = target.model_copy(deep=True)
-        if types.ModelType.TEXT not in target_copy.types:
-          return target_copy
-        if not isinstance(
-            target_copy.endpoint,
-            (types.GeminiAPIEndpoint, types.VertexEndpoint),
-        ):
-          raise ValueError(
-              f"Cannot apply thinking_level to ModelTarget '{target.name}':"
-              " endpoint must be a GeminiAPIEndpoint or VertexEndpoint, got"
-              f" {type(target_copy.endpoint).__name__}."
-          )
-        if (
-            target_copy.endpoint.options is not None
-            and target_copy.endpoint.options.thinking_level is not None
-        ):
-          raise ValueError(
-              f"ModelTarget '{target.name}' already sets"
-              f" thinking_level={target_copy.endpoint.options.thinking_level!r};"
-              " remove thinking_level from ModelTarget and pass it to"
-              " .eval(thinking_level=...), or pass .eval(thinking_level=None)"
-              " to keep the ModelTarget's setting."
-          )
-        if target_copy.endpoint.options is None:
-          target_copy.endpoint.options = types.GeminiModelOptions(
-              thinking_level=thinking_level
-          )
-        else:
-          target_copy.endpoint.options.thinking_level = thinking_level
-        return target_copy
-
-      updates["models"] = [_with_thinking_level(t) for t in models]
-      shorthand_model = getattr(self, "model", None)
-      if isinstance(shorthand_model, types.ModelTarget):
-        if shorthand_model.endpoint is None:
-          build_endpoint = getattr(self, "_build_shorthand_endpoint", None)
-          if callable(build_endpoint):
-            shorthand_model = shorthand_model.model_copy(
-                deep=True, update={"endpoint": build_endpoint()}
-            )
-        updates["model"] = _with_thinking_level(shorthand_model)
-
-    return cast(Self, self.model_copy(update=updates))
 
   @abc.abstractmethod
   def create_strategy(

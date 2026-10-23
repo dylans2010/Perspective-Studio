@@ -108,7 +108,8 @@ struct QuickChatView: View {
                 isAgentMode: false,
                 indexDirectory: ContextIndexManager.directoryText(
                     mode: .chat,
-                    globalCustomPrompt: globalPrompt
+                    globalCustomPrompt: globalPrompt,
+                    activeSkillIDs: Set(chatViewModel.activeSkills.map(\.id))
                 ),
                 retrievedContext: ContextIndexManager.retrievedBundle(
                     query: text,

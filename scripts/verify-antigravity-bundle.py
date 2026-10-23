@@ -86,6 +86,31 @@ def main():
                 harness.append(os.path.join(dirpath, name))
     check(not harness, "no compiled localharness runtime in the vendored tree")
 
+    print("== Locally strip: no Google model content in hand-written sources ==")
+    # The vendored hand-written Python was stripped of Google's model
+    # layer (models, model connections, built-in tool definitions,
+    # default system instructions): models, tools, and system prompts
+    # are Locally's own, served from its context index. Generated proto
+    # descriptors (proto/*_pb2.py) are inert and explicitly excluded —
+    # they embed genai type names by construction and are never edited
+    # by hand. If Google model content returns to a hand-written file,
+    # this check fails loudly.
+    strip_offenders = []
+    for dirpath, _dirs, files in os.walk(SDK_DIR):
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, SDK_DIR)
+            if "_pb2.py" in name or os.sep + "proto" + os.sep in path:
+                continue
+            text = open(path, encoding="utf-8").read()
+            if re.search(r"gemini-\d", text) or "DEFAULT_MODEL" in text:
+                strip_offenders.append(rel)
+    check(not strip_offenders,
+          "no Google model strings (gemini-*, DEFAULT_MODEL) in hand-written .py"
+          + (f" — offenders: {', '.join(strip_offenders)}" if strip_offenders else ""))
+
     if failures:
         print(f"\n{len(failures)} problem(s): the Antigravity SDK is NOT correctly bundled.")
         return 1

@@ -15,7 +15,11 @@ import CryptoKit
 ///   (`bin/localharness`) is NOT bundled — it is excluded at vendor time,
 ///   and `status()` fails verification if any executable runtime or native
 ///   binary appears in the bundle. Inference is always the user's local
-///   models via `InferenceBackend`.
+///   models via `InferenceBackend`. The vendored hand-written sources
+///   are additionally stripped of Google's model layer, model
+///   connections, built-in tool definitions, and default system
+///   instructions (see `AntigravitySDK/BUNDLED.md`) — models, tools, and
+///   system prompts are Locally's own, served from the context index.
 /// - **No tools.** The SDK's built-in tools are never registered or run.
 ///   Every tool the agent can call is Locally's own, from `ToolsRegistry`.
 ///
@@ -113,7 +117,7 @@ public enum AntigravitySDKBundle {
     /// or, if verification failed, that it must say so instead of assuming.
     public nonisolated static func agentModeContextLine(status: Status) -> String {
         if status.isUsable {
-            return "Agent engine: the bundled Antigravity SDK \(status.version ?? "") is present and integrity-verified (\(status.fileCount) files). Its agent loop is running this conversation — every tool call you make goes through it."
+            return "Agent engine: the bundled Antigravity SDK \(status.version ?? "") is present and integrity-verified (\(status.fileCount) files). It provides the agent-loop design only — models, tools, and system prompts are Locally's own, served from the local context index, and every tool call you make goes through Locally's own registry while the loop runs this conversation."
         }
         if status.isBundled {
             return "Agent engine: the bundled Antigravity SDK is present but failed verification (\(status.issues.joined(separator: " "))). The native loop still runs this conversation; if the user asks about the agent engine, tell them it reported a problem instead of claiming it is healthy."

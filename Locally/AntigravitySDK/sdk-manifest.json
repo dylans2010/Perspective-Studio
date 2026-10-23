@@ -9,8 +9,8 @@
     },
     {
       "path": "google/antigravity/__init__.py",
-      "sha256": "40ed12117105f4ca747d3d519c0e1be59c2f41ca45471319bc86a72e73fc7f77",
-      "bytes": 3578
+      "sha256": "603edcd0d03e7641e8dd12b06e6531cbc6172159042ff3e2134f1f75e88b4788",
+      "bytes": 2826
     },
     {
       "path": "google/antigravity/agent.py",
@@ -24,78 +24,78 @@
     },
     {
       "path": "google/antigravity/connections/connection.py",
-      "sha256": "9c55790446153d671e6c7931dd8285d1c62ca56112b439062e2f2b5eb7bb66c4",
-      "bytes": 24455
+      "sha256": "edf7c2faa42eb1ec21eb563ff83a51d5038a9721480c14bf101ba69ffd38fbf0",
+      "bytes": 16250
     },
     {
       "path": "google/antigravity/connections/local/__init__.py",
-      "sha256": "920ef850d304f357be1feb4c4be083cb9dbaae6e76c8c0d92dbe140ed92df3e7",
-      "bytes": 2313
+      "sha256": "5483e567c8bd8b944c64b6fd945f8b0d706f4e276941e26164afbf631a6cf0b5",
+      "bytes": 1109
     },
     {
       "path": "google/antigravity/connections/local/event_processor.py",
-      "sha256": "d2c938c5eb637c30d6b37040763aa3ddcba7b207aabee9ff07bb955f66ea3dd5",
-      "bytes": 40388
+      "sha256": "4882c72ea07a75dfeb5e995d11dea157c309978e042239b252e5a0c9c7ab16b9",
+      "bytes": 1159
     },
     {
       "path": "google/antigravity/connections/local/hook_router.py",
-      "sha256": "15d25600207b366528bf03432d012bcbfc4fb432d41b8ff76997c8b878550d58",
-      "bytes": 14957
+      "sha256": "4454a86818f146cf177b240720a60da752c343dc78d4cc005399d8c3322118d0",
+      "bytes": 1099
     },
     {
       "path": "google/antigravity/connections/local/litert_connection.py",
-      "sha256": "a2fe1474611e74ad95f98303f71a262ccf40c691d5b34605755fe2b8cfe82dab",
-      "bytes": 16700
+      "sha256": "3114b7acd2409d695996d8cad5b3c465ab62cf6578e88924890a013449790625",
+      "bytes": 1130
     },
     {
       "path": "google/antigravity/connections/local/litert_connection_config.py",
-      "sha256": "54388f54e6dcf03a47428519ad309a72c8d03b805385d525f0a66f66c397a705",
-      "bytes": 8055
+      "sha256": "d42e610850fc7dbf69125f6dffe429012caa4a496de5c14563c7bfa816fdc07f",
+      "bytes": 1126
     },
     {
       "path": "google/antigravity/connections/local/litert_server.py",
-      "sha256": "c39e09da37442b76b458c916f38627c59e7c4421dae9b14fa5c79d816321f4ac",
-      "bytes": 15171
+      "sha256": "7078da45f6d54b642e8ac706ba9319c4faabc42bd41a64ce1f424e0a82609c6e",
+      "bytes": 1152
     },
     {
       "path": "google/antigravity/connections/local/local_connection.py",
-      "sha256": "db0a610331679963761b5c16a7b18f992d18fd6a876fc1e4bbb24f8e0b4c3c18",
-      "bytes": 54089
+      "sha256": "bbad515d4497f5c825835f19d8a52c2d563c3a3a98a42a1692f5bbe5c498ca0e",
+      "bytes": 1220
     },
     {
       "path": "google/antigravity/connections/local/local_connection_config.py",
-      "sha256": "c1ef6438c0abe2a3d1850ef0295f827ec0f890ad6c4227c8af35f521bc155a59",
-      "bytes": 14512
+      "sha256": "67c0b9769d1454d692d3b780e53ba68339f41afe0f9b69becedc5e16c3c9c8a9",
+      "bytes": 1196
     },
     {
       "path": "google/antigravity/connections/local/local_openai_connection.py",
-      "sha256": "cae0188a5a8ca0cb874813e26be2f6fa908d3d6ead73695f4ff40275ea19fd6a",
-      "bytes": 2013
+      "sha256": "a0bd046c3eda39c637c9e583ba869a2ff10f5c467478a395975e4ad2ba53d9cd",
+      "bytes": 1080
     },
     {
       "path": "google/antigravity/connections/local/local_openai_connection_config.py",
-      "sha256": "8c41a0db244a84268fa7a96872e21eb704581dd9b9047d1c1cb01dcc93a8e96d",
-      "bytes": 4607
+      "sha256": "3855727d2d5c48bb5ec87db87f15456a4a69e30952f306780a9261fbe14f212a",
+      "bytes": 1113
     },
     {
       "path": "google/antigravity/connections/local/proto_converters.py",
-      "sha256": "27644db3b9e3424edd3d371673979415944fc78e84bddae629129e7135cc0a49",
-      "bytes": 1950
+      "sha256": "0be0be5ef5bbbae81d02d93215faedf0ab5057e83ce1b28bd58d1597a7f7992e",
+      "bytes": 1086
     },
     {
       "path": "google/antigravity/connections/local/struct_converter.py",
-      "sha256": "b2b4ea3b7de67c4b028d24e9733cb0843d62b869bb8fd9271313e3bcb1caec53",
-      "bytes": 12061
+      "sha256": "86f036ef5ce71d1cf92bc6508b7df355ff6c41e4dc0f4839d5fdf517b979d49e",
+      "bytes": 1100
     },
     {
       "path": "google/antigravity/connections/local/test_utils.py",
-      "sha256": "2e2404f327e1fe33de766d3d82f7e6e8d5633d822575ddd52a06e679c8ef4df9",
-      "bytes": 5883
+      "sha256": "00bb854622f556dbe5e93ca5c74136629f9dfd87f9e15bc150d77584378a07a7",
+      "bytes": 1058
     },
     {
       "path": "google/antigravity/connections/local/types.py",
-      "sha256": "a99a267e22d575ee2a8a35e0b1bd15b48e5eb40ff5809758d70f109713b80a5a",
-      "bytes": 3872
+      "sha256": "ce3218462cb88fd8165eb4fa2b59d21237178ccb624b7f836f50438a19b04dab",
+      "bytes": 1224
     },
     {
       "path": "google/antigravity/conversation/conversation.py",
@@ -119,13 +119,13 @@
     },
     {
       "path": "google/antigravity/hooks/policy.py",
-      "sha256": "7e0a1100db7ce95f5c9989ee8713e5f6afb082941d41f780f84e0ec6d8f7eb65",
-      "bytes": 31436
+      "sha256": "4b4a15fbecdf99ad1f65f739083575c4ca4913ea1176007ce2b43d0b6910bcc2",
+      "bytes": 31448
     },
     {
       "path": "google/antigravity/models.py",
-      "sha256": "f1d9adc1ed47c8b44622552008f56c9ba7d8975722f93553cdb8b55462b3088c",
-      "bytes": 5318
+      "sha256": "2a83ab6e4686369b7283d5683bdac32956f9bf06885806cb7d4edd602b645235",
+      "bytes": 1212
     },
     {
       "path": "google/antigravity/policy/__init__.py",
@@ -274,8 +274,8 @@
     },
     {
       "path": "google/antigravity/tools/schema_utils.py",
-      "sha256": "141efbc8c82877256247cbcfa20370fbb2e97b4cc1d3f87c7dcc9a0d911c16ba",
-      "bytes": 3841
+      "sha256": "078d385712adda96b6ba4afb6210bc3d5332b9c5e3169aa5a708648d03a9a807",
+      "bytes": 1157
     },
     {
       "path": "google/antigravity/tools/tool_context.py",
@@ -309,8 +309,8 @@
     },
     {
       "path": "google/antigravity/types.py",
-      "sha256": "eb252d36d062a94924a654fd0037647b6b351824e854bbc260cca48be8c93adc",
-      "bytes": 63056
+      "sha256": "39439ee8ff55b1aada145b945f25a3b7ef96b35ce327a736d39e21a2775c2b01",
+      "bytes": 61841
     },
     {
       "path": "google/antigravity/utils/__init__.py",

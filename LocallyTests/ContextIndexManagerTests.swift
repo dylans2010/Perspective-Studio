@@ -321,4 +321,164 @@ final class ContextIndexManagerTests: XCTestCase {
             XCTAssertTrue(withProject.contains("context_index_search"))
         }
     }
+
+    // MARK: - Precomputed token scoring
+
+    /// The reference implementation of the ORIGINAL scoring formula,
+    /// tokenizing on every call. `score()` must agree with it exactly —
+    /// the precomputed token sets are a performance change, not a
+    /// behavior change.
+    private func referenceScore(entry: ContextIndexManager.Entry, queryTokens: [String]) -> Int {
+        var total = 0
+        if entry.kind == .customPrompt { total += 500 }
+        if entry.kind == .skill && entry.isActiveSkill { total += 300 }
+        guard !queryTokens.isEmpty else { return total }
+        let titleTokens = Set(ContextIndexManager.tokenize(entry.title))
+        let keywordTokens = Set(entry.keywords.flatMap { ContextIndexManager.tokenize($0) })
+        let descriptionTokens = Set(ContextIndexManager.tokenize(entry.description))
+        let payloadTokens = Set(ContextIndexManager.tokenize(entry.payload))
+        var payloadHits = 0
+        for token in queryTokens {
+            if titleTokens.contains(token) { total += 10 }
+            if keywordTokens.contains(token) { total += 6 }
+            if descriptionTokens.contains(token) { total += 3 }
+            if payloadTokens.contains(token) { payloadHits += 1 }
+        }
+        total += min(payloadHits, 5)
+        return total
+    }
+
+    func testScoreWithPrecomputedTokensMatchesDirectTokenization() {
+        let active = skill(name: "Review", markdown: "Review the diff for swift style issues and cite files.", active: true)
+        let entries = makeIndex(
+            mode: .agent,
+            tools: [CalculatorAssistTool(), GitHistoryFixtureTool(), AssistReadFileTool()],
+            skills: [active],
+            activeSkillIDs: [active.id],
+            globalPrompt: "Be terse.\n\nAlways cite files.",
+            project: project(memoryTexts: ["Uses SwiftData for storage"])
+        )
+        let queries = [
+            "git commit history",
+            "calculator arithmetic",
+            "swift style review",
+            "cite files please",
+            "swiftdata storage",
+            "banana smoothie recipe",
+            ""
+        ]
+        for query in queries {
+            let queryTokens = ContextIndexManager.tokenize(query)
+            for entry in entries {
+                XCTAssertEqual(
+                    ContextIndexManager.score(entry: entry, queryTokens: queryTokens),
+                    referenceScore(entry: entry, queryTokens: queryTokens),
+                    "score mismatch for entry \(entry.id) on query '\(query)'"
+                )
+            }
+        }
+        // And the prepared sets are what the reference tokenization builds.
+        let git = entries.first { $0.id == "tool:git_history" }
+        XCTAssertEqual(git?.preparedTokens.title, Set(ContextIndexManager.tokenize("Git History")))
+        XCTAssertTrue(git?.preparedTokens.payload.contains("path") ?? false)
+    }
+
+    // MARK: - Index cache
+
+    @MainActor
+    func testIndexCacheReturnsCachedEntriesForSameFingerprint() {
+        let cache = ContextIndexCache()
+        let fingerprint = ContextIndexCache.Fingerprint(
+            mode: .chat, tools: "t", assets: "a", skills: "s",
+            activeSkills: "x", prompts: "p", project: "none"
+        )
+        var builds = 0
+        let build: @MainActor () -> [ContextIndexManager.Entry] = {
+            builds += 1
+            return [ContextIndexManager.Entry(
+                id: "tool:fixture", kind: .tool, title: "Fixture",
+                description: "fixture", payload: "payload", order: 0
+            )]
+        }
+        let first = cache.entries(fingerprint: fingerprint, build: build)
+        let second = cache.entries(fingerprint: fingerprint, build: build)
+        XCTAssertEqual(builds, 1)
+        XCTAssertEqual(cache.buildCount, 1)
+        XCTAssertEqual(first, second)
+
+        var changed = fingerprint
+        changed.prompts = "different"
+        _ = cache.entries(fingerprint: changed, build: build)
+        XCTAssertEqual(builds, 2)
+        XCTAssertEqual(cache.buildCount, 2)
+    }
+
+    @MainActor
+    func testLiveEntriesSecondCallIsACacheHit() {
+        // Warm up once so any launch-time manager scan settles, then
+        // reset: two identical live consultations must build exactly once.
+        _ = ContextIndexManager.liveEntries(mode: .chat, globalCustomPrompt: "cache probe")
+        ContextIndexCache.shared.reset()
+        let first = ContextIndexManager.liveEntries(mode: .chat, globalCustomPrompt: "cache probe")
+        let second = ContextIndexManager.liveEntries(mode: .chat, globalCustomPrompt: "cache probe")
+        XCTAssertEqual(ContextIndexCache.shared.buildCount, 1)
+        XCTAssertEqual(first, second)
+        XCTAssertFalse(first.isEmpty)
+    }
+
+    // MARK: - AFM scored tool selection
+
+    func testFoundationRunnerScoresAndCapsOfferedTools() {
+        if #available(macOS 26.0, *) {
+            let ids = FoundationModelAgentRunner.runToolIDs(
+                query: "calculator arithmetic expression",
+                projectID: nil,
+                computerUseEnabled: false
+            )
+            XCTAssertTrue(ids.contains("calculator"))
+            XCTAssertTrue(ids.contains("context_index_search"))
+            XCTAssertTrue(ids.contains("system_asset_lookup"))
+            XCTAssertLessThanOrEqual(ids.count, FoundationModelAgentRunner.maxOfferedTools)
+            XCTAssertLessThanOrEqual(FoundationModelAgentRunner.maxOfferedTools, 12)
+        }
+    }
+
+    func testFoundationRunnerNeverOffersComputerToolsWhenDisabled() {
+        if #available(macOS 26.0, *) {
+            let ids = FoundationModelAgentRunner.runToolIDs(
+                query: "screenshot screen click mouse keyboard",
+                projectID: nil,
+                computerUseEnabled: false
+            )
+            XCTAssertFalse(ids.contains { $0.hasPrefix("computer_") })
+        }
+    }
+
+    func testFoundationRunnerOffersScoredComputerToolsWhenEnabled() {
+        if #available(macOS 26.0, *) {
+            let ids = FoundationModelAgentRunner.runToolIDs(
+                query: "take a screenshot of the screen",
+                projectID: nil,
+                computerUseEnabled: true
+            )
+            XCTAssertTrue(ids.contains("computer_screenshot"))
+            XCTAssertLessThanOrEqual(ids.count, FoundationModelAgentRunner.maxOfferedTools)
+        }
+    }
+
+    func testFoundationRunnerProjectRunAlwaysOffersMemoryAndTreeView() {
+        if #available(macOS 26.0, *) {
+            // A query with no lexical overlap at all: the mandate tools
+            // are offered regardless of score.
+            let ids = FoundationModelAgentRunner.runToolIDs(
+                query: "banana smoothie recipe",
+                projectID: UUID(),
+                computerUseEnabled: false
+            )
+            XCTAssertTrue(ids.contains("project_memory"))
+            XCTAssertTrue(ids.contains("tree_view"))
+            XCTAssertTrue(ids.contains("context_index_search"))
+            XCTAssertTrue(ids.contains("system_asset_lookup"))
+        }
+    }
 }

@@ -12,45 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Lightweight strategy establishing connection to an external local OpenAI API (Ollama, LM Studio)."""
+"""Removed in Locally's loop-only strip.
 
-from typing import Any
+Upstream, this module contained an OpenAI-compatible model connection built on the local model connection.
 
-from google.antigravity.proto import localharness_pb2
-from google.antigravity import types
-from google.antigravity.connections.local import local_connection
-
-
-class LocalOpenAIConnectionStrategy(local_connection.LocalConnectionStrategy):
-  """Lightweight strategy establishing connection to an external local OpenAI API (Ollama)."""
-
-  def __init__(
-      self,
-      *,
-      base_url: str,
-      model_name: str,
-      **kwargs: Any,
-  ):
-    self._base_url = base_url
-    self._model_name = model_name
-    super().__init__(**kwargs)
-
-  def _validate_connection(self) -> None:
-    """Validates that base_url is specified for OpenAI connection."""
-    if not self._base_url:
-      raise types.AntigravityValidationError(
-          "LocalOpenAIConnectionStrategy requires a non-empty 'base_url'."
-      )
-
-  def _build_harness_config(self) -> localharness_pb2.HarnessConfig:
-    """Clear Gemini config and populate external Gemma server details."""
-    harness_config = super()._build_harness_config()
-    model_cfg = localharness_pb2.ModelConfig(
-        name=self._model_name,
-        types=[localharness_pb2.MODEL_TYPE_TEXT],
-        gemma_endpoint=localharness_pb2.GemmaEndpoint(
-            base_url=self._base_url,
-        ),
-    )
-    harness_config.models.append(model_cfg)
-    return harness_config
+Locally bundles the Antigravity SDK for its agent-loop design only:
+models, tool calling, and system prompts always come from Locally's own
+context index, never from Google — so this content was removed. The
+file remains (empty of code) so the vendored tree layout, the bundle
+manifest, and the build's file-count gate stay intact. See BUNDLED.md.
+"""
