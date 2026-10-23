@@ -15,6 +15,7 @@ struct ChatPromptSuggestion: Identifiable {
 struct ChatDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openWindow) private var openWindow
     let conversation: Conversation
     @Bindable var chatViewModel: ChatViewModel
     var isSidebarCollapsed: Bool = false
@@ -28,6 +29,7 @@ struct ChatDetailView: View {
     @AppStorage("enableThinkingMode") private var enableThinkingMode: Bool = true
     @AppStorage("thinkingBudget") private var thinkingBudget: String = "medium"
 
+    @State private var showSkillsPopover: Bool = false
     @FocusState private var isInputFocused: Bool
 
     private let suggestions: [ChatPromptSuggestion] = [
@@ -109,44 +111,28 @@ struct ChatDetailView: View {
     // MARK: - Top Control Bar (Exact Image 1 Parity)
 
     private var topControlBar: some View {
-        ZStack {
+        ZStack(alignment: .center) {
             // Center element is mathematically centered in the entire view width
             modelSelectorPill
 
-            // Leading and Trailing items
-            HStack(spacing: 8) {
+            // Leading and Trailing items leveled horizontally in the same 32pt row
+            HStack(alignment: .center, spacing: 10) {
                 if isSidebarCollapsed {
-                    // Reserved space for macOS traffic lights
+                    // Traffic lights safe spacing
                     Spacer()
-                        .frame(width: 72)
+                        .frame(width: 76)
 
-                    if let onOpenSettings {
-                        Button {
-                            onOpenSettings()
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.85))
-                                .frame(width: 32, height: 32)
-                                .liquidGlass(.circle)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Settings")
+                    Button {
+                        openWindow(id: "settings")
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(width: 28, height: 28)
+                            .liquidGlass(.circle)
                     }
-
-                    if let onToggleSidebar {
-                        Button {
-                            onToggleSidebar()
-                        } label: {
-                            Image(systemName: "sidebar.left")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.85))
-                                .frame(width: 32, height: 32)
-                                .liquidGlass(.circle)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Show Sidebar")
-                    }
+                    .buttonStyle(.plain)
+                    .help("Settings (⌘,)")
                 }
 
                 Spacer()
@@ -157,16 +143,16 @@ struct ChatDetailView: View {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
-                        .frame(width: 32, height: 32)
+                        .frame(width: 28, height: 28)
                         .liquidGlass(.circle)
                 }
                 .buttonStyle(.plain)
                 .help("New Chat (⌘N)")
             }
         }
-        .frame(height: 36)
+        .frame(height: 32)
         .padding(.horizontal, 16)
-        .padding(.top, 14)
+        .padding(.top, 10)
         .padding(.bottom, 6)
     }
 
@@ -394,6 +380,29 @@ struct ChatDetailView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help(enableThinkingMode ? "Thinking Mode: Active (\(thinkingBudget.capitalized))" : "Thinking Mode: Off")
+
+                // Left Sparkles: Chat Skills Integration
+                Button {
+                    showSkillsPopover.toggle()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: chatViewModel.activeSkills.isEmpty ? "sparkles" : "sparkles.rectangle.stack.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(chatViewModel.activeSkills.isEmpty ? Color.white.opacity(0.85) : Color.cyan)
+                        if !chatViewModel.activeSkills.isEmpty {
+                            Text("\(chatViewModel.activeSkills.count)")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.cyan)
+                        }
+                    }
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(.circle)
+                }
+                .buttonStyle(.plain)
+                .help("Active Skills (\(chatViewModel.activeSkills.count) active in chat)")
+                .popover(isPresented: $showSkillsPopover) {
+                    ActiveSkillsPopoverView(chatViewModel: chatViewModel)
+                }
 
                 // Main Input Capsule in Pure Liquid Glass
                 HStack(alignment: .center, spacing: 10) {
@@ -627,5 +636,97 @@ private struct MessageRowView: View {
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation { copied = false }
         }
+    }
+}
+
+// MARK: - Active Skills Popover
+
+struct ActiveSkillsPopoverView: View {
+    @Bindable var chatViewModel: ChatViewModel
+    @State private var skillsManager = SkillsManager.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.cyan)
+                    Text("Chat Skills")
+                        .font(.system(size: 14, weight: .bold))
+                }
+                Spacer()
+                if !chatViewModel.activeSkills.isEmpty {
+                    Button("Clear All") {
+                        chatViewModel.activeSkills.removeAll()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            Text("Enable skills to guide on-device AI responses with specialist workflows and prompt instructions.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            if skillsManager.skills.isEmpty {
+                VStack(spacing: 8) {
+                    Text("No local skills discovered yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Scan Skills") {
+                        Task { await skillsManager.scanAllSkills() }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(skillsManager.skills) { skill in
+                            let isActive = chatViewModel.isSkillActive(skill)
+                            Button {
+                                chatViewModel.toggleSkill(skill)
+                            } label: {
+                                HStack(alignment: .center, spacing: 10) {
+                                    Image(systemName: skill.source.icon)
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(skill.source.brandColor)
+                                        .frame(width: 22)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(skill.name)
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                        Text(skill.description)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.white.opacity(0.65))
+                                            .lineLimit(1)
+                                    }
+
+                                    Spacer()
+
+                                    Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(isActive ? Color.cyan : Color.white.opacity(0.3))
+                                        .font(.system(size: 14))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(isActive ? Color.cyan.opacity(0.18) : Color.white.opacity(0.05), in: .rect(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+            }
+        }
+        .padding(14)
+        .frame(width: 320)
+        .background(Color(hex: "13171D") ?? .black)
     }
 }

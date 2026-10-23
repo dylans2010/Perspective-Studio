@@ -40,6 +40,19 @@ enum ModelProvider: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    var assetImageName: String {
+        switch self {
+        case .qwen: "provider-qwen"
+        case .gemma: "provider-google"
+        case .mistral: "provider-mistral"
+        case .deepseek: "provider-deepseek"
+        case .llama: "provider-meta"
+        case .phi: "provider-microsoft"
+        case .apple: "provider-apple"
+        case .other: "provider-google"
+        }
+    }
+
     static func identify(for model: HFModel) -> ModelProvider {
         let name = model.displayName.lowercased()
         if name.contains("qwen") || name.contains("qwq") {
@@ -58,6 +71,43 @@ enum ModelProvider: String, CaseIterable, Identifiable, Sendable {
             return .apple
         } else {
             return .other
+        }
+    }
+}
+
+struct ProviderLogoView: View {
+    let provider: ModelProvider
+    var familyName: String? = nil
+    var size: CGFloat = 20
+
+    private var resolvedAssetName: String {
+        if let familyName {
+            let lower = familyName.lowercased()
+            if lower.contains("gemma") || lower.contains("google") { return "provider-google" }
+            if lower.contains("llama") || lower.contains("meta") { return "provider-meta" }
+            if lower.contains("mistral") || lower.contains("codestral") { return "provider-mistral" }
+            if lower.contains("deepseek") { return "provider-deepseek" }
+            if lower.contains("qwen") { return "provider-qwen" }
+            if lower.contains("phi") || lower.contains("microsoft") { return "provider-microsoft" }
+            if lower.contains("apple") || lower.contains("openelm") { return "provider-apple" }
+            if lower.contains("lfm") || lower.contains("liquid") { return "provider-liquid" }
+            if lower.contains("minicpm") || lower.contains("bmb") { return "provider-minicpm" }
+            if lower.contains("bonsai") { return "provider-bonsai" }
+        }
+        return provider.assetImageName
+    }
+
+    var body: some View {
+        if let image = NSImage(named: resolvedAssetName) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: provider.icon)
+                .font(.system(size: size * 0.75, weight: .semibold))
+                .foregroundStyle(provider.brandColor)
+                .frame(width: size, height: size)
         }
     }
 }

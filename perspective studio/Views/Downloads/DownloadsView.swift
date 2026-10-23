@@ -6,6 +6,7 @@ struct DownloadsView: View {
     var onClose: (() -> Void)? = nil
     @State private var downloadsManager = DownloadsManager.shared
     @State private var selectedTab: DownloadsViewTab = .browse
+    @State private var selectedFamily: ModelFamily? = nil
     @State private var downloadedModels: [LocalDiskModel] = []
     @State private var isScanningLocal = false
     @State private var modelToDelete: LocalDiskModel?
@@ -30,37 +31,39 @@ struct DownloadsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top Tab Picker
-            HStack(spacing: 12) {
-                if let onClose {
-                    Button {
-                        onClose()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("Chat")
+            // Top Tab Picker (Only shown when not viewing a family detail to prevent double headers)
+            if selectedFamily == nil {
+                HStack(spacing: 12) {
+                    if let onClose {
+                        Button {
+                            onClose()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                Text("Chat")
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
                         }
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                }
 
-                Picker("View", selection: $selectedTab) {
-                    ForEach(DownloadsViewTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
+                    Picker("View", selection: $selectedTab) {
+                        ForEach(DownloadsViewTab.allCases) { tab in
+                            Text(tab.rawValue).tag(tab)
+                        }
                     }
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+
+                Divider()
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-
-            Divider()
 
             switch selectedTab {
             case .browse:
-                ModelsOverviewView(chatViewModel: chatViewModel)
+                ModelsOverviewView(chatViewModel: chatViewModel, selectedFamily: $selectedFamily)
             case .local:
                 localDownloadsView
             }

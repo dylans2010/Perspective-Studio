@@ -5,6 +5,7 @@ import SwiftData
 struct LocallyApp: App {
     @State private var selectedTab: SidebarTab = .chat
     @State private var chatViewModel = ChatViewModel()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup {
@@ -15,7 +16,7 @@ struct LocallyApp: App {
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
-                    selectedTab = .settings
+                    openWindow(id: "settings")
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
@@ -30,11 +31,22 @@ struct LocallyApp: App {
 
                 ForEach(SidebarTab.allCases) { tab in
                     Button("Go to \(tab.title)") {
-                        selectedTab = tab
+                        if tab == .settings {
+                            openWindow(id: "settings")
+                        } else {
+                            selectedTab = tab
+                        }
                     }
                     .keyboardShortcut(tab.keyEquivalent, modifiers: .command)
                 }
             }
         }
+
+        Window("Locally Settings", id: "settings") {
+            SettingsView(onClose: nil)
+                .modelContainer(for: [UserProfile.self, Conversation.self, Message.self])
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 820, height: 620)
     }
 }

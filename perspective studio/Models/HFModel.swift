@@ -86,6 +86,35 @@ struct HFModel: Identifiable, Hashable, Sendable {
         return weightGB + overhead
     }
 
+    var estimatedSizeBytes: Int64 {
+        if let params = parameterSize {
+            let bitsPerParam: Double = {
+                if let q = quantization {
+                    if q.contains("4") { return 4.5 }
+                    if q.contains("8") { return 8.5 }
+                    if q.contains("bf16") || q.contains("fp16") { return 16.0 }
+                    if q.contains("fp32") { return 32.0 }
+                }
+                return 4.5
+            }()
+            let bytes = (params * 1_000_000_000.0 * bitsPerParam) / 8.0
+            return Int64(bytes)
+        }
+        return 3_800_000_000
+    }
+
+    var sizeFormattedFromAPI: String {
+        ByteCountFormatter.string(fromByteCount: estimatedSizeBytes, countStyle: .file)
+    }
+
+    var ramFormattedFromAPI: String {
+        if let ram = estimatedRAMGB {
+            let bytes = Int64(ram * 1024 * 1024 * 1024)
+            return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory) + " RAM"
+        }
+        return "4.5 GB RAM"
+    }
+
     var category: ModelCategory {
         let pipeline = (pipelineTag ?? "").lowercased()
         let nameLower = displayName.lowercased()

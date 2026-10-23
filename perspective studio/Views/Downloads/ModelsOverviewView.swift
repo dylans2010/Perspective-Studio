@@ -4,9 +4,14 @@ import AppKit
 struct ModelsOverviewView: View {
     @Bindable var chatViewModel: ChatViewModel
     var onClose: (() -> Void)? = nil
-
-    @State private var selectedFamily: ModelFamily? = nil
+    @Binding var selectedFamily: ModelFamily?
     @State private var searchQuery: String = ""
+
+    init(chatViewModel: ChatViewModel, onClose: (() -> Void)? = nil, selectedFamily: Binding<ModelFamily?>) {
+        self.chatViewModel = chatViewModel
+        self.onClose = onClose
+        self._selectedFamily = selectedFamily
+    }
 
     private var families: [ModelFamily] {
         if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -129,9 +134,7 @@ struct ModelsOverviewView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     // Header: Icon + Title & Downloaded Checkmark
                     HStack(spacing: 8) {
-                        Image(systemName: family.icon)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
+                        ProviderLogoView(provider: family.provider, familyName: family.name, size: 24)
 
                         Text(family.name)
                             .font(.system(size: 16, weight: .bold))

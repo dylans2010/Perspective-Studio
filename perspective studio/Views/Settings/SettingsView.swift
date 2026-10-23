@@ -79,6 +79,8 @@ struct SettingsView: View {
     @State private var downloadedModels: [LocalDiskModel] = []
     @State private var isScanningLocal: Bool = false
     @State private var showingImportSheet: Bool = false
+    @State private var showingDownloadsSheet: Bool = false
+    @State private var selectedPresetCategory: String = "Engineering"
 
     @State private var customTopColor: Color = Color(hex: GradientTheme.defaultTopHex) ?? .green
     @State private var customBottomColor: Color = Color(hex: GradientTheme.defaultBottomHex) ?? .black
@@ -183,6 +185,12 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingImportSheet) {
             ImportFromProvidersView()
+        }
+        .sheet(isPresented: $showingDownloadsSheet) {
+            NavigationStack {
+                DownloadsView(chatViewModel: ChatViewModel(), onClose: { showingDownloadsSheet = false })
+            }
+            .frame(minWidth: 800, minHeight: 600)
         }
         .alert("Clear All Conversation History?", isPresented: $showDeleteHistoryAlert) {
             Button("Cancel", role: .cancel) {}
@@ -356,7 +364,39 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Models & Storage")
                 .font(.system(size: 20, weight: .bold))
-                .foregroundStyle(.white)
+            // Model Catalog & Downloads Launcher
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 26))
+                        .foregroundStyle(.blue)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Model Catalog & Downloads")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text("Browse, download, and manage open-weight models from Hugging Face.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        showingDownloadsSheet = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Browse Models")
+                            Image(systemName: "arrow.up.right")
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+            .padding(16)
+            .liquidGlass(.rect(cornerRadius: 14))
 
             // Storage Summary Card
             VStack(alignment: .leading, spacing: 10) {
@@ -518,11 +558,60 @@ struct SettingsView: View {
                     .background(Color(.controlBackgroundColor))
                     .clipShape(.rect(cornerRadius: 8))
 
-                // Quick Presets
-                HStack(spacing: 8) {
-                    promptPresetButton(title: "Helpful & Direct", prompt: "You are a concise, highly capable AI assistant.")
-                    promptPresetButton(title: "Senior Engineer", prompt: "You are a senior software architect providing production-grade code.")
-                    promptPresetButton(title: "Deep Thinker", prompt: "You are an analytical researcher. Think step-by-step and reason rigorously.")
+                // 26 Clean Categorized Presets (Appends to prompt)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Add Presets (Appends to prompt)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+
+                    // Category Filter Pills
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 6) {
+                            ForEach(["Engineering", "Writing", "Reasoning", "Domain", "Personas"], id: \.self) { cat in
+                                Button {
+                                    selectedPresetCategory = cat
+                                } label: {
+                                    Text(cat)
+                                        .font(.system(size: 11, weight: selectedPresetCategory == cat ? .bold : .regular))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(selectedPresetCategory == cat ? Color.accentColor : Color.white.opacity(0.08))
+                                        .foregroundStyle(selectedPresetCategory == cat ? .white : .primary)
+                                        .clipShape(.capsule)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+
+                    // Presets for the selected category
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(Self.allPresets.filter { $0.category == selectedPresetCategory }) { preset in
+                                Button {
+                                    appendPromptPreset(preset)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "plus")
+                                            .font(.system(size: 9, weight: .bold))
+                                        Text(preset.title)
+                                            .font(.system(size: 11, weight: .medium))
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.secondary.opacity(0.14))
+                                    .clipShape(.capsule)
+                                }
+                                .buttonStyle(.plain)
+                                .help(preset.prompt)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
                 }
             }
             .padding(16)
@@ -621,19 +710,59 @@ struct SettingsView: View {
         }
     }
 
-    private func promptPresetButton(title: String, prompt: String) -> some View {
-        Button {
-            customSystemPrompt = prompt
-        } label: {
-            Text(title)
-                .font(.caption)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.15))
-                .clipShape(.capsule)
+    private func appendPromptPreset(_ preset: SystemPromptPresetItem) {
+        let trimmed = customSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            customSystemPrompt = preset.prompt
+        } else {
+            customSystemPrompt = trimmed + "\n\n" + preset.prompt
         }
-        .buttonStyle(.plain)
     }
+
+    struct SystemPromptPresetItem: Identifiable, Sendable {
+        let id = UUID()
+        let category: String
+        let title: String
+        let prompt: String
+    }
+
+    static let allPresets: [SystemPromptPresetItem] = [
+        // Engineering (5)
+        SystemPromptPresetItem(category: "Engineering", title: "Senior Architect", prompt: "You are a principal software architect. Provide clean, modular, production-ready code with complete types and robust error handling."),
+        SystemPromptPresetItem(category: "Engineering", title: "Swift & iOS", prompt: "You are an expert Apple platform engineer specializing in Swift 6, SwiftUI, SwiftData, and modern Apple Human Interface Guidelines."),
+        SystemPromptPresetItem(category: "Engineering", title: "Code Reviewer", prompt: "Carefully inspect code for security flaws, race conditions, edge cases, memory leaks, and performance regressions before proposing fixes."),
+        SystemPromptPresetItem(category: "Engineering", title: "Python & ML", prompt: "You are a senior machine learning engineer writing high-performance, vectorized, and clean Python implementations."),
+        SystemPromptPresetItem(category: "Engineering", title: "DevOps Engineer", prompt: "Act as a senior DevOps engineer focusing on Docker, CI/CD pipelines, reproducible builds, and infrastructure reliability."),
+
+        // Writing (5)
+        SystemPromptPresetItem(category: "Writing", title: "Concise & Direct", prompt: "Be concise and to the point. Give direct answers without unnecessary conversational filler or preamble."),
+        SystemPromptPresetItem(category: "Writing", title: "Executive Brief", prompt: "Condense complex reports and discussions into high-impact executive summaries with clear bulleted key takeaways."),
+        SystemPromptPresetItem(category: "Writing", title: "Proofreader", prompt: "Proofread and polish text for flawless grammar, precision, active voice, and professional flow."),
+        SystemPromptPresetItem(category: "Writing", title: "Creative Storyteller", prompt: "Write with vivid sensory details, emotional depth, compelling metaphors, and captivating narrative pacing."),
+        SystemPromptPresetItem(category: "Writing", title: "Copywriter", prompt: "Write punchy, high-converting copy that hooks readers, articulates clear value propositions, and inspires action."),
+
+        // Reasoning (5)
+        SystemPromptPresetItem(category: "Reasoning", title: "First Principles", prompt: "Deconstruct problems into foundational first principles. Avoid reasoning by analogy and question underlying assumptions."),
+        SystemPromptPresetItem(category: "Reasoning", title: "Math & Logic", prompt: "Work step-by-step through mathematical and formal logic proofs, validating each intermediate state."),
+        SystemPromptPresetItem(category: "Reasoning", title: "Socratic Method", prompt: "Use the Socratic method to ask clarifying, probing questions that challenge premises and deepen understanding."),
+        SystemPromptPresetItem(category: "Reasoning", title: "Data Analyst", prompt: "Analyze empirical data with statistical rigor, highlighting correlations, sample biases, and confidence intervals."),
+        SystemPromptPresetItem(category: "Reasoning", title: "Red Team & Risk", prompt: "Identify vulnerability vectors, worst-case failure scenarios, and attack surfaces before suggesting remediations."),
+
+        // Domain (5)
+        SystemPromptPresetItem(category: "Domain", title: "Meeting Minutes", prompt: "Transform raw transcripts and notes into structured action items with owners, context, and deadlines."),
+        SystemPromptPresetItem(category: "Domain", title: "Legal Reader", prompt: "Highlight potential legal risks, indemnities, unusual clauses, and ambiguity in contracts and agreements."),
+        SystemPromptPresetItem(category: "Domain", title: "Research Explainer", prompt: "Translate academic papers and dense technical jargon into intuitive concepts with clear analogies."),
+        SystemPromptPresetItem(category: "Domain", title: "Financial Analyst", prompt: "Evaluate business models, cash flow fundamentals, margin sustainability, and valuation drivers."),
+        SystemPromptPresetItem(category: "Domain", title: "Product Manager", prompt: "Write structured PRDs with user stories, acceptance criteria, success metrics, and edge case specifications."),
+
+        // Personas (6)
+        SystemPromptPresetItem(category: "Personas", title: "Patient Tutor", prompt: "Explain difficult subjects from scratch with analogies, checking for comprehension at each step."),
+        SystemPromptPresetItem(category: "Personas", title: "Polyglot Translator", prompt: "Translate with cultural fidelity and nuance, preserving idioms and tone across languages."),
+        SystemPromptPresetItem(category: "Personas", title: "Interview Coach", prompt: "Act as an interviewer at a top tech company, asking rigorous behavioral and technical questions."),
+        SystemPromptPresetItem(category: "Personas", title: "Devil's Advocate", prompt: "Challenge every viewpoint presented with the strongest counter-arguments and alternative perspectives."),
+        SystemPromptPresetItem(category: "Personas", title: "ELI5 Simplifier", prompt: "Explain complex concepts like I'm five years old (ELI5), avoiding all technical jargon."),
+        SystemPromptPresetItem(category: "Personas", title: "Bullet Points Only", prompt: "Always format answers as concise, categorized bullet points for rapid scanning.")
+    ]
 
     private func scanLocalDownloads() async {
         isScanningLocal = true

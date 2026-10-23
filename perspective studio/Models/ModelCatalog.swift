@@ -218,10 +218,11 @@ final class ModelCatalog {
 
             guard !matchedModels.isEmpty else { continue }
 
-            // Transform HFModel records into dynamic ModelCatalogVariant
+            // Transform HFModel records into dynamic ModelCatalogVariant with zero hardcoding
             let variants: [ModelCatalogVariant] = matchedModels.prefix(12).map { model in
                 let name = model.displayName
-                let (sizeStr, ramStr) = estimateSizeAndRAM(from: name)
+                let sizeStr = model.sizeFormattedFromAPI
+                let ramStr = model.ramFormattedFromAPI
                 let badges = deriveBadges(from: model, defaultBadges: def.defaultBadges)
                 let desc = generateDescription(for: name, pipeline: model.pipelineTag)
 
@@ -257,30 +258,6 @@ final class ModelCatalog {
     private static func formatVariantName(_ id: String) -> String {
         let clean = id.replacingOccurrences(of: "mlx-community/", with: "")
         return clean.replacingOccurrences(of: "-", with: " ")
-    }
-
-    private static func estimateSizeAndRAM(from name: String) -> (String, String) {
-        let lower = name.lowercased()
-        if lower.contains("70b") || lower.contains("72b") {
-            return ("39.5 GB", "48.0 GB RAM")
-        } else if lower.contains("32b") || lower.contains("35b") {
-            return ("18.4 GB", "24.0 GB RAM")
-        } else if lower.contains("27b") {
-            return ("16.2 GB", "20.5 GB RAM")
-        } else if lower.contains("14b") {
-            return ("8.9 GB", "12.0 GB RAM")
-        } else if lower.contains("8b") || lower.contains("9b") {
-            return ("4.9 GB", "6.8 GB RAM")
-        } else if lower.contains("7b") {
-            return ("4.3 GB", "6.0 GB RAM")
-        } else if lower.contains("3b") || lower.contains("4b") {
-            return ("2.4 GB", "3.6 GB RAM")
-        } else if lower.contains("1.5b") || lower.contains("2b") {
-            return ("1.4 GB", "2.1 GB RAM")
-        } else if lower.contains("0.5b") || lower.contains("0.6b") || lower.contains("450m") {
-            return ("480 MB", "1.1 GB RAM")
-        }
-        return ("3.8 GB", "5.2 GB RAM")
     }
 
     private static func deriveBadges(from model: HFModel, defaultBadges: [ModelCatalogBadge]) -> [ModelCatalogBadge] {
@@ -324,6 +301,19 @@ final class ModelCatalog {
         }
     }
 
+    private static func createSeedVariant(id: String, name: String, desc: String, badges: [ModelCatalogBadge], tags: [String] = ["text-generation"]) -> ModelCatalogVariant {
+        let raw = HFModel(id: id, name: id, downloads: 45000, likes: 1200, tags: tags, pipelineTag: "text-generation", createdAt: nil)
+        return ModelCatalogVariant(
+            id: id,
+            name: name,
+            description: desc,
+            sizeFormatted: raw.sizeFormattedFromAPI,
+            ramFormatted: raw.ramFormattedFromAPI,
+            badges: badges,
+            rawModel: raw
+        )
+    }
+
     // Initial placeholder seeds while the HuggingFace API call resolves
     private static func initialSeedFamilies() -> [ModelFamily] {
         [
@@ -335,23 +325,18 @@ final class ModelCatalog {
                 description: "State-of-the-art multilingual and reasoning models by Alibaba Cloud.",
                 badges: [.new, .thinking, .code],
                 variants: [
-                    ModelCatalogVariant(
+                    createSeedVariant(
                         id: "mlx-community/Qwen2.5-7B-Instruct-4bit",
                         name: "Qwen 2.5 7B Instruct",
-                        description: "High-accuracy open instruction model with strong coding, math, and multilingual abilities.",
-                        sizeFormatted: "4.3 GB",
-                        ramFormatted: "6.0 GB RAM",
-                        badges: [.new, .code, .recommended],
-                        rawModel: HFModel(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", name: "Qwen2.5-7B-Instruct-4bit", downloads: 54000, likes: 1200, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                        desc: "High-accuracy open instruction model with strong coding, math, and multilingual abilities.",
+                        badges: [.new, .code, .recommended]
                     ),
-                    ModelCatalogVariant(
+                    createSeedVariant(
                         id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
                         name: "Qwen 2.5 Coder 7B",
-                        description: "Code intelligence specialist benchmarked against top-tier programming models.",
-                        sizeFormatted: "4.3 GB",
-                        ramFormatted: "6.0 GB RAM",
+                        desc: "Code intelligence specialist benchmarked against top-tier programming models.",
                         badges: [.code, .tools],
-                        rawModel: HFModel(id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit", name: "Qwen2.5-Coder-7B-Instruct-4bit", downloads: 41000, likes: 980, tags: ["code"], pipelineTag: "text-generation", createdAt: nil)
+                        tags: ["code"]
                     )
                 ]
             ),
@@ -363,23 +348,17 @@ final class ModelCatalog {
                 description: "Open models built from Google DeepMind Gemini research and technology.",
                 badges: [.new, .thinking, .vision],
                 variants: [
-                    ModelCatalogVariant(
+                    createSeedVariant(
                         id: "mlx-community/gemma-2-2b-it-4bit",
                         name: "Gemma 2 2B Instruct",
-                        description: "Lightweight conversational model with rapid latency on Apple Silicon.",
-                        sizeFormatted: "1.6 GB",
-                        ramFormatted: "2.1 GB RAM",
-                        badges: [.new, .recommended],
-                        rawModel: HFModel(id: "mlx-community/gemma-2-2b-it-4bit", name: "gemma-2-2b-it-4bit", downloads: 32000, likes: 850, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                        desc: "Lightweight conversational model with rapid latency on Apple Silicon.",
+                        badges: [.new, .recommended]
                     ),
-                    ModelCatalogVariant(
+                    createSeedVariant(
                         id: "mlx-community/gemma-2-9b-it-4bit",
                         name: "Gemma 2 9B Instruct",
-                        description: "Flagship Google open weights offering high factual precision.",
-                        sizeFormatted: "5.4 GB",
-                        ramFormatted: "7.2 GB RAM",
-                        badges: [.new, .thinking],
-                        rawModel: HFModel(id: "mlx-community/gemma-2-9b-it-4bit", name: "gemma-2-9b-it-4bit", downloads: 48000, likes: 1100, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                        desc: "Flagship Google open weights offering high factual precision.",
+                        badges: [.new, .thinking]
                     )
                 ]
             ),
@@ -391,23 +370,17 @@ final class ModelCatalog {
                 description: "High-capability reasoning and coding models with advanced chain-of-thought distillation.",
                 badges: [.thinking, .code, .recommended],
                 variants: [
-                    ModelCatalogVariant(
+                    createSeedVariant(
                         id: "mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit",
                         name: "DeepSeek R1 Distill Qwen 7B",
-                        description: "Reasoning distilled model that explores deep analytical steps before concluding.",
-                        sizeFormatted: "4.4 GB",
-                        ramFormatted: "6.2 GB RAM",
-                        badges: [.thinking, .recommended],
-                        rawModel: HFModel(id: "mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit", name: "DeepSeek-R1-Distill-Qwen-7B-4bit", downloads: 98000, likes: 3200, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                        desc: "Reasoning distilled model that explores deep analytical steps before concluding.",
+                        badges: [.thinking, .recommended]
                     ),
-                    ModelCatalogVariant(
+                    createSeedVariant(
                         id: "mlx-community/DeepSeek-R1-Distill-Llama-8B-4bit",
                         name: "DeepSeek R1 Distill Llama 8B",
-                        description: "Meta Llama backbone augmented with DeepSeek reasoning traces.",
-                        sizeFormatted: "4.9 GB",
-                        ramFormatted: "6.8 GB RAM",
-                        badges: [.thinking, .code],
-                        rawModel: HFModel(id: "mlx-community/DeepSeek-R1-Distill-Llama-8B-4bit", name: "DeepSeek-R1-Distill-Llama-8B-4bit", downloads: 64000, likes: 2100, tags: ["text-generation"], pipelineTag: "text-generation", createdAt: nil)
+                        desc: "Meta Llama backbone augmented with DeepSeek reasoning traces.",
+                        badges: [.thinking, .code]
                     )
                 ]
             )

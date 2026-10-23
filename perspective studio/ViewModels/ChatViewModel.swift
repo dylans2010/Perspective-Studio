@@ -43,10 +43,24 @@ final class ChatViewModel {
     var attachedVideoURL: URL?
     var attachedFileURLs: [URL] = []
     var installedModels: [InstalledModel] = []
+    var activeSkills: Set<AgentSkill> = []
+    var downloadErrors: [String: String] = [:]
 
     private var generationTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var lastAnnouncedMilestone: Int = 0
+
+    func toggleSkill(_ skill: AgentSkill) {
+        if activeSkills.contains(skill) {
+            activeSkills.remove(skill)
+        } else {
+            activeSkills.insert(skill)
+        }
+    }
+
+    func isSkillActive(_ skill: AgentSkill) -> Bool {
+        activeSkills.contains(skill)
+    }
 
     func fetchModels() async {
         isLoadingModels = true
@@ -65,11 +79,61 @@ final class ChatViewModel {
         let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let conversation = selectedConversation else { return }
 
-        if case .ready = modelState {} else {
-            let warning = Message(role: .system, content: "Please select and load a model first using the Model picker.")
-            warning.conversation = conversation
-            conversation.messages.append(warning)
-            try? context.save()
+        // If a model is not yet loaded into memory, auto-load the current or first installed model
+        if case .ready = modelState {
+            // Already ready, continue
+        } else {
+            // Check if we have installed models
+            if installedModels.isEmpty {
+                scanInstalledModels()
+            }
+
+            let candidateModel: InstalledModel? = {
+                if let sel = selectedModelID, let match = installedModels.first(where: { $0.id == sel }) {
+                    return match
+                }
+                return installedModels.first
+            }()
+
+            guard let modelToLoad = candidateModel else {
+                let warning = Message(role: .system, content: "No downloaded models found on this Mac. Please open the Downloads tab or Settings → Models to download a model.")
+                warning.conversation = conversation
+                conversation.messages.append(warning)
+                try? context.save()
+                return
+            }
+
+            // Automatically trigger model load and proceed once ready
+            selectedModelID = modelToLoad.id
+            selectedModelIsVisual = modelToLoad.isVisual
+            modelState = .loading
+
+            let videoURL = attachedVideoURL
+            let fileURLs = attachedFileURLs
+            messageText = ""
+            attachedVideoURL = nil
+            attachedFileURLs = []
+
+            Task {
+                do {
+                    let stream = try await LLMService.shared.loadModelByID(modelToLoad.id, isVideoModel: modelToLoad.isVisual)
+                    for try await progress in stream {
+                        modelState = .downloading(progress)
+                    }
+                    modelState = .loading
+                    try await LLMService.shared.finishLoading()
+                    modelState = .ready(modelToLoad.displayName)
+
+                    // Now proceed with sending message
+                    await processAndSend(text: text, videoURL: videoURL, fileURLs: fileURLs, in: conversation, context: context)
+                } catch {
+                    modelState = .error(error.localizedDescription)
+                    let warning = Message(role: .system, content: "Could not load \(modelToLoad.displayName): \(error.localizedDescription)")
+                    warning.conversation = conversation
+                    conversation.messages.append(warning)
+                    try? context.save()
+                }
+            }
             return
         }
 
@@ -80,53 +144,57 @@ final class ChatViewModel {
         attachedFileURLs = []
 
         Task {
-            // Read file contents off the main thread
-            var parts: [String] = []
-
-            if let url = videoURL {
-                parts.append("📹 \(url.lastPathComponent)")
-            }
-
-            for fileURL in fileURLs {
-                let name = fileURL.lastPathComponent
-                let content = await Task.detached(priority: .userInitiated) {
-                    try? String(contentsOf: fileURL, encoding: .utf8)
-                }.value
-                if let content {
-                    let trimmed = content.count > 10_000 ? String(content.prefix(10_000)) + "\n…(truncated)" : content
-                    parts.append("📎 \(name)\n```\n\(trimmed)\n```")
-                } else {
-                    parts.append("📎 \(name) (could not read file)")
-                }
-            }
-
-            parts.append(text)
-
-            let displayContent = parts.joined(separator: "\n\n")
-
-            let userMessage = Message(role: .user, content: displayContent)
-            userMessage.conversation = conversation
-            conversation.messages.append(userMessage)
-            conversation.updatedAt = .now
-
-            if conversation.title == "New Conversation" {
-                let maxLen = 40
-                if text.count <= maxLen {
-                    conversation.title = text
-                } else {
-                    let truncated = String(text.prefix(maxLen))
-                    if let lastSpace = truncated.lastIndex(of: " ") {
-                        conversation.title = String(truncated[..<lastSpace]) + "…"
-                    } else {
-                        conversation.title = truncated + "…"
-                    }
-                }
-            }
-
-            try? context.save()
-
-            generateResponse(for: conversation, in: context, videoURLs: videoURL.map { [$0] } ?? [])
+            await processAndSend(text: text, videoURL: videoURL, fileURLs: fileURLs, in: conversation, context: context)
         }
+    }
+
+    private func processAndSend(text: String, videoURL: URL?, fileURLs: [URL], in conversation: Conversation, context: ModelContext) async {
+        // Read file contents off the main thread
+        var parts: [String] = []
+
+        if let url = videoURL {
+            parts.append("📹 \(url.lastPathComponent)")
+        }
+
+        for fileURL in fileURLs {
+            let name = fileURL.lastPathComponent
+            let content = await Task.detached(priority: .userInitiated) {
+                try? String(contentsOf: fileURL, encoding: .utf8)
+            }.value
+            if let content {
+                let trimmed = content.count > 10_000 ? String(content.prefix(10_000)) + "\n…(truncated)" : content
+                parts.append("📎 \(name)\n```\n\(trimmed)\n```")
+            } else {
+                parts.append("📎 \(name) (could not read file)")
+            }
+        }
+
+        parts.append(text)
+
+        let displayContent = parts.joined(separator: "\n\n")
+
+        let userMessage = Message(role: .user, content: displayContent)
+        userMessage.conversation = conversation
+        conversation.messages.append(userMessage)
+        conversation.updatedAt = .now
+
+        if conversation.title == "New Conversation" {
+            let maxLen = 40
+            if text.count <= maxLen {
+                conversation.title = text
+            } else {
+                let truncated = String(text.prefix(maxLen))
+                if let lastSpace = truncated.lastIndex(of: " ") {
+                    conversation.title = String(truncated[..<lastSpace]) + "…"
+                } else {
+                    conversation.title = truncated + "…"
+                }
+            }
+        }
+
+        try? context.save()
+
+        generateResponse(for: conversation, in: context, videoURLs: videoURL.map { [$0] } ?? [])
     }
 
     private func generateResponse(for conversation: Conversation, in context: ModelContext, videoURLs: [URL] = []) {
@@ -172,6 +240,15 @@ final class ChatViewModel {
                 )
 
                 var effectiveSystemPrompt = conversation.systemPrompt ?? ""
+
+                // Inject Active Skills into System Prompt
+                if !activeSkills.isEmpty {
+                    let skillsContext = activeSkills.map { skill in
+                        "### Active Skill: \(skill.name)\n\(skill.fullMarkdown)"
+                    }.joined(separator: "\n\n")
+                    effectiveSystemPrompt += "\n\n[Active Skills Instructions]:\n" + skillsContext
+                }
+
                 let isThinkingEnabled = UserDefaults.standard.bool(forKey: "enableThinkingMode")
                 let thinkingBudget = UserDefaults.standard.string(forKey: "thinkingBudget") ?? "medium"
                 if isThinkingEnabled {
@@ -273,6 +350,9 @@ final class ChatViewModel {
                 modelState = .ready(model.displayName)
                 AccessibilityNotification.Announcement("Model ready to use").post()
             } catch {
+                let log = "[\(Date().formatted(date: .abbreviated, time: .standard))] Error loading \(model.id): \(error.localizedDescription)"
+                self.downloadErrors[model.id] = log
+                print("❌ [Locally Model Error] \(log)")
                 modelState = .error(friendlyErrorMessage(for: error, model: model))
             }
         }
@@ -292,7 +372,11 @@ final class ChatViewModel {
     func friendlyErrorMessage(for error: Error, model: HFModel) -> String {
         let description = error.localizedDescription.lowercased()
 
-        if description.contains("memory") || description.contains("ram") {
+        if description.contains("401") || description.contains("unauthorized") || description.contains("gated") {
+            return "\(model.displayName) is gated or restricted on Hugging Face. Requires authentication or license approval."
+        } else if description.contains("404") || description.contains("not found") {
+            return "\(model.displayName) repository was not found on Hugging Face (404)."
+        } else if description.contains("memory") || description.contains("ram") {
             return "This model is too large for your Mac's memory. Try a smaller model."
         } else if description.contains("network") || description.contains("internet") || description.contains("connection") {
             return "Could not download the model. Check your internet connection and try again."
@@ -301,7 +385,7 @@ final class ChatViewModel {
         } else if description.contains("token") || description.contains("vocab") {
             return "This model's format is not supported yet. Try a different model."
         } else {
-            return "Something went wrong loading \(model.displayName). Try a different model or restart the app."
+            return "Could not load \(model.displayName): \(error.localizedDescription)"
         }
     }
 
@@ -383,6 +467,9 @@ final class ChatViewModel {
                     modelState = .idle
                     AccessibilityNotification.Announcement("Model downloaded successfully").post()
                 } else {
+                    let log = "[\(Date().formatted(date: .abbreviated, time: .standard))] Error downloading \(model.id): \(error.localizedDescription)"
+                    self.downloadErrors[model.id] = log
+                    print("❌ [Locally Model Error] \(log)")
                     modelState = .error(friendlyErrorMessage(for: error, model: model))
                 }
             }

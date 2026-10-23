@@ -71,6 +71,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
 
 struct MainView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openWindow) private var openWindow
     @Binding var selectedTab: SidebarTab
     @Bindable var chatViewModel: ChatViewModel
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -80,7 +81,7 @@ struct MainView: View {
             ConversationListView(
                 selectedConversation: $chatViewModel.selectedConversation,
                 onOpenSettings: {
-                    selectedTab = .settings
+                    openWindow(id: "settings")
                 },
                 onOpenDownloads: {
                     selectedTab = .downloads
@@ -115,7 +116,7 @@ struct MainView: View {
                         }
                     },
                     onOpenSettings: {
-                        selectedTab = .settings
+                        openWindow(id: "settings")
                     }
                 )
             case .compare:
