@@ -158,18 +158,51 @@ public final class AntigravityAgentHarness {
     /// Rejected calls never appear here — nothing was executed for them.
     public private(set) var toolCallRecords: [ToolCallRecord] = []
 
+    /// The identity of the run currently executing, if any. Every stream
+    /// event, tool dispatch, and outcome of a run is tied to this id;
+    /// consumers (ChatViewModel) apply an event only while its run is
+    /// still the active one, so a late result from a superseded run
+    /// cannot overwrite a newer answer.
+    public private(set) var activeRunID: UUID?
+    /// Runs explicitly cancelled by id. A run checks this set (in
+    /// addition to its task's cancellation) before every model request
+    /// and every tool dispatch: cancelling run A records A's id, so a
+    /// newer run B — different id, same singleton harness — is never
+    /// cancelled or corrupted by A's stop.
+    private var cancelledRunIDs: Set<UUID> = []
+
     private var activeTask: Task<Void, Never>?
 
     public init() {}
 
+    /// True when the given run must stop: its task was cancelled, or it
+    /// was cancelled by id via `cancel(runID:)`.
+    public func isRunCancelled(_ runID: UUID) -> Bool {
+        Task.isCancelled || cancelledRunIDs.contains(runID)
+    }
+
     /// Cancels any in-flight agent execution.
     public func cancel() {
+        if let activeRunID {
+            cancelledRunIDs.insert(activeRunID)
+        }
         activeTask?.cancel()
         activeTask = nil
         if isRunning {
             status = .idle
             isRunning = false
             activeToolName = nil
+        }
+    }
+
+    /// Cancels one specific run by id. If that run is not the active one
+    /// this does NOT touch the active run's state — it only records the
+    /// id, so the targeted run (wherever it is observed) stops and its
+    /// late events are dropped by run-id checks.
+    public func cancel(runID: UUID) {
+        cancelledRunIDs.insert(runID)
+        if runID == activeRunID {
+            cancel()
         }
     }
 
@@ -188,11 +221,21 @@ public final class AntigravityAgentHarness {
         maxTurns: Int = 10,
         maxToolExecutions: Int = AntigravityLoopEngine.maxToolExecutionsPerRun,
         toolTimeout: Duration = ToolExecutor.defaultTimeout,
+        runID: UUID? = nil,
+        runDuration: Duration = GenerationDefaults.maxAgentRunDuration,
+        turnDuration: Duration = GenerationDefaults.maxAgentTurnDuration,
         backend: (any InferenceBackend)? = nil,
         additionalSystemPrompt: String? = nil,
         onEvent: (@MainActor (AgentHarnessEvent) -> Void)? = nil
     ) async -> AgentExecutionOutcome {
         cancel()
+        // This run's identity. Callers that need to correlate events,
+        // cancellation, and the outcome with their own state pass their
+        // id in; otherwise the run mints one. From here on, every
+        // cancellation check and every deadline is scoped to THIS run.
+        let thisRunID = runID ?? UUID()
+        activeRunID = thisRunID
+        let runScope = GenerationRun(id: thisRunID, startedAt: .now)
         isRunning = true
         steps = []
         toolCallRecords = []
@@ -201,6 +244,20 @@ public final class AntigravityAgentHarness {
         activeToolName = nil
         let turnBudget = max(1, min(maxTurns, 32))
         let executionBudget = max(1, maxToolExecutions)
+
+        /// The per-turn stream deadline: the turn's own limit, or
+        /// whatever is left of the run's limit, whichever ends first.
+        func turnDeadline() -> Duration {
+            min(turnDuration, runScope.remaining(limit: runDuration))
+        }
+        /// True when this run's wall-clock limit has expired.
+        func runExpired() -> Bool {
+            runScope.hasExceeded(limit: runDuration)
+        }
+        /// The timeout explanation a run ends with when its limit hits.
+        func runTimeoutReason() -> String {
+            "I stopped this run at its time limit (\(Int(GenerationRun.seconds(from: runDuration).rounded()))s). The steps from this run show what was completed before the limit; nothing after it ran."
+        }
 
         let dispatchStatus: @MainActor (AgentHarnessStatus) -> Void = { [weak self] newStatus in
             guard let self else { return }
@@ -217,6 +274,13 @@ public final class AntigravityAgentHarness {
         defer {
             self.isRunning = false
             self.activeToolName = nil
+            // Only the run that still owns the harness may clear the
+            // active id — a finishing old run must not erase a newer
+            // run's identity (which would silently un-scope its events).
+            if self.activeRunID == thisRunID {
+                self.activeRunID = nil
+            }
+            self.cancelledRunIDs.remove(thisRunID)
         }
 
         let selectedBackend = backend ?? InferenceBackends.default
@@ -265,6 +329,10 @@ public final class AntigravityAgentHarness {
                 workspaceRoot: workspaceRoot,
                 projectID: projectID,
                 maxTurns: maxTurns,
+                runID: thisRunID,
+                maxDuration: runDuration,
+                maxToolExecutions: executionBudget,
+                toolTimeout: toolTimeout,
                 dispatchStatus: dispatchStatus,
                 addStep: addStep,
                 onEvent: onEvent,
@@ -324,12 +392,16 @@ public final class AntigravityAgentHarness {
         func directTurn(extraInstruction: String? = nil) async -> (answer: String, thinking: String?, wantsTool: Bool) {
             var text = ""
             do {
-                let stream = try selectedBackend.stream(
+                let rawStream = try selectedBackend.stream(
                     prompt: prompt,
                     systemPrompt: extraInstruction.map { directSystemPrompt + "\n\n" + $0 } ?? directSystemPrompt
                 )
+                // A direct turn is a generation like any other: it gets
+                // the turn deadline, so a conversational reply cannot
+                // hang or dribble past the limit either.
+                let stream = StreamTimeout.events(rawStream, after: turnDeadline())
                 for try await event in stream {
-                    if Task.isCancelled { break }
+                    if isRunCancelled(thisRunID) { break }
                     if case .token(let token) = event {
                         text += token
                         onEvent?(.tokenStreamed(token))
@@ -349,7 +421,7 @@ public final class AntigravityAgentHarness {
 
         if intent != .task {
             var direct = await directTurn()
-            if intent == .conversational && (direct.wantsTool || direct.answer.isEmpty) && !Task.isCancelled {
+            if intent == .conversational && (direct.wantsTool || direct.answer.isEmpty) && !isRunCancelled(thisRunID) && !runExpired() {
                 // One retry with the plain-text requirement stated again.
                 // Never a hardcoded reply: if the model still cannot
                 // answer conversationally, the failure is reported as one.
@@ -424,6 +496,12 @@ public final class AntigravityAgentHarness {
         /// Turn announcements that described work without requesting it.
         var narrationTurns = 0
         var narrationSignatures: [String] = []
+        /// Signatures of every non-empty assistant text turn this run
+        /// produced (see `AntigravityLoopEngine.textTurnSignature`). A
+        /// text turn the loop continues past — a rejected draft, a
+        /// tool-state sentence — that repeats verbatim is no progress,
+        /// even though no tool call is involved for the tool guard to see.
+        var textTurnSignatures: [String] = []
         /// The last refusal, so a stopped run can say what went wrong.
         var lastRejection: ToolCallRejection?
         /// Consecutive empty model turns; bounded, then the run stops
@@ -435,18 +513,29 @@ public final class AntigravityAgentHarness {
         var loopStoppedReason: String?
 
         // 3. Multi-turn Agent Loop
-        loop: while turnCount < turnBudget && !Task.isCancelled {
+        loop: while turnCount < turnBudget && !isRunCancelled(thisRunID) {
             turnCount += 1
+
+            // Run deadline, checked before every model request: a run
+            // that has used its time budget schedules nothing further —
+            // no more generations, no more tools — and ends below with
+            // the timeout as its terminal state.
+            if runExpired() {
+                loopStoppedReason = runTimeoutReason()
+                break loop
+            }
             dispatchStatus(.thinking)
             currentThought = ""
 
             let fullPrompt = Self.assemblePrompt(turns: conversationTurns)
 
             var turnResponse = ""
+            var turnTimedOut = false
             do {
-                let stream = try selectedBackend.stream(prompt: fullPrompt, systemPrompt: systemPrompt)
+                let rawStream = try selectedBackend.stream(prompt: fullPrompt, systemPrompt: systemPrompt)
+                let stream = StreamTimeout.events(rawStream, after: turnDeadline())
                 for try await event in stream {
-                    if Task.isCancelled { break }
+                    if isRunCancelled(thisRunID) { break }
                     switch event {
                     case .token(let token):
                         turnResponse += token
@@ -456,11 +545,18 @@ public final class AntigravityAgentHarness {
                         break
                     }
                 }
+            } catch let error as GenerationTimeoutError {
+                // One turn exceeded its deadline (or the run's remaining
+                // time): terminal for the run, with the work already done
+                // preserved in the steps — not a model error, and never a
+                // silent continuation into another turn.
+                _ = error
+                turnTimedOut = true
             } catch {
                 // A cancelled run is a cancellation, not a model error: report
                 // it as such so the UI never blames inference for the user's
                 // stop.
-                if Task.isCancelled {
+                if isRunCancelled(thisRunID) {
                     dispatchStatus(.idle)
                     return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
                 }
@@ -471,7 +567,13 @@ public final class AntigravityAgentHarness {
                 return AgentExecutionOutcome(answer: finalAnswer, steps: steps, success: false, error: msg)
             }
 
-            if Task.isCancelled {
+            if turnTimedOut {
+                loopStoppedReason = runExpired() ? runTimeoutReason()
+                    : "I stopped this run because one model turn exceeded its time limit (\(Int(GenerationRun.seconds(from: turnDuration).rounded()))s) without finishing. \(toolCallsExecuted) tool step(s) ran before that — the steps from this run show what was done."
+                break loop
+            }
+
+            if isRunCancelled(thisRunID) {
                 dispatchStatus(.idle)
                 return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
             }
@@ -490,6 +592,19 @@ public final class AntigravityAgentHarness {
             // raw invocation) is never forwarded to the chat as a message.
             switch AntigravityLoopEngine.decide(turnText: turnResponse, catalog: catalog) {
             case .callTool(let toolId, let codableArgs):
+                // A cancelled or expired run dispatches NOTHING further,
+                // however the model turn classified: cancellation is
+                // checked at the dispatch point itself, not only between
+                // turns, so a stop that lands mid-turn cannot leak one
+                // last tool execution.
+                if isRunCancelled(thisRunID) {
+                    dispatchStatus(.idle)
+                    return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
+                }
+                if runExpired() {
+                    loopStoppedReason = runTimeoutReason()
+                    break loop
+                }
                 // Execution budget: a run may not spin through tools forever.
                 guard toolCallsExecuted < executionBudget else {
                     loopStoppedReason = "I stopped this run at the tool limit (\(executionBudget) actions). The steps from this run show what was executed; anything after the limit did not run."
@@ -685,6 +800,27 @@ public final class AntigravityAgentHarness {
                     continue
                 }
 
+                // Repeated-text guard: this run already produced this
+                // exact text turn once and the loop continued past it
+                // (below, via a mandate rejection). Producing it again
+                // is no progress by definition — the tool guard cannot
+                // see it, because no tool call is involved. This is the
+                // rejected draft (or a tool-state sentence like "that
+                // tool was not called") repeated until the turn cap.
+                // Narration turns are handled above with their own
+                // guard and never reach here twice.
+                let textSignature = AntigravityLoopEngine.textTurnSignature(cleanAnswer)
+                if AntigravityLoopEngine.isRepeatedTextTurn(signature: textSignature, previousSignatures: textTurnSignatures) {
+                    addStep(AgentStep(
+                        kind: .thought,
+                        title: "Repeated Response Stopped",
+                        detail: "The model produced the same response again after the loop had already continued past it once. Repeating it cannot make progress, so the run stopped."
+                    ))
+                    loopStoppedReason = "I stopped this run because the model repeated the same response instead of progressing. \(toolCallsExecuted) tool step(s) ran before that — the steps from this run show what was done."
+                    break loop
+                }
+                textTurnSignatures.append(textSignature)
+
                 // Project Tool Mandate: with a project active, a final
                 // answer is only acceptable after the agent has actually
                 // used its tools in the project. A tool-less answer is
@@ -740,7 +876,7 @@ public final class AntigravityAgentHarness {
         // instruction echoes, loop markers) reached the chat as prose.
         let runSucceeded = loopStoppedReason == nil && !finalAnswer.isEmpty
         if finalAnswer.isEmpty {
-            finalAnswer = Task.isCancelled
+            finalAnswer = isRunCancelled(thisRunID)
                 ? "Execution was cancelled."
                 : (loopStoppedReason
                     ?? "I reached the step limit (\(turnBudget) turns) before finishing this task. \(toolCallsExecuted) tool step(s) ran — the steps from this run show what was done, and nothing further was executed.")

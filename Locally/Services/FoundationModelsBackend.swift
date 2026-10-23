@@ -36,6 +36,14 @@ nonisolated enum AppleLanguageModel {
 
                     for try await snapshot in session.streamResponse(to: prompt, options: options) {
                         try Task.checkCancellation()
+                        // Duration limit, enforced in the stream itself:
+                        // a response that cannot finish within the chat
+                        // limit ends with a timeout error instead of
+                        // streaming until the user gives up on the app.
+                        if Date.now.timeIntervalSince(start) > GenerationRun.seconds(from: GenerationDefaults.maxChatGenerationDuration) {
+                            continuation.finish(throwing: GenerationTimeoutError(limit: GenerationDefaults.maxChatGenerationDuration))
+                            return
+                        }
                         let text = snapshot.content
                         // Snapshots are cumulative; a non-prefix snapshot (a
                         // fresh generation) is emitted in full instead.

@@ -26,12 +26,21 @@ nonisolated struct AssistToolBridge: Tool {
     let description: String
     let parameters: GenerationSchema
     let context: AssistContext
+    /// The run's shared tool budget: every bridged call claims one slot
+    /// before executing, so the framework-driven loop is capped exactly
+    /// like the MLX loop. Optional for non-run callers.
+    let budget: ToolExecutionBudget?
+    /// Per-call timeout, enforced with the same race `ToolExecutor`
+    /// uses on the MLX path.
+    let toolTimeout: Duration
     let onEvent: (@Sendable (FoundationModelToolEvent) -> Void)?
 
     @MainActor
     init(
         tool: any AssistTool,
         context: AssistContext,
+        budget: ToolExecutionBudget? = nil,
+        toolTimeout: Duration = ToolExecutor.defaultTimeout,
         onEvent: (@Sendable (FoundationModelToolEvent) -> Void)? = nil
     ) throws {
         self.toolID = tool.id
@@ -39,6 +48,8 @@ nonisolated struct AssistToolBridge: Tool {
         self.description = tool.description
         self.parameters = try Self.parametersSchema(for: tool.parametersSchema)
         self.context = context
+        self.budget = budget
+        self.toolTimeout = toolTimeout
         self.onEvent = onEvent
     }
 
@@ -47,10 +58,55 @@ nonisolated struct AssistToolBridge: Tool {
         let preview = input.mapValues { String(describing: $0) }
         onEvent?(.started(toolID: toolID, arguments: preview))
 
+        // Run budget first: a call past the run's tool limit executes
+        // nothing. The refusal reaches the model as an error result (the
+        // framework's tool channel), so it can end the run honestly
+        // instead of believing the action ran.
+        if let budget, !budget.claim() {
+            let refused = AssistToolResult.failure(
+                "This run has reached its tool limit (\(budget.limit) actions). No further actions were executed.",
+                code: .executionFailed
+            )
+            onEvent?(.finished(toolID: toolID, result: refused))
+            return "ERROR — this action did not run: the run reached its tool limit. Give your final answer from what you already have, and say plainly that the limit stopped further actions."
+        }
+
         // The registry is main-actor isolated; hop for both the lookup and the
-        // call so tool-side UI state stays on the main actor.
-        let registry = await ToolsRegistry.shared
-        let result = try await registry.execute(toolId: toolID, arguments: input, context: context)
+        // call so tool-side UI state stays on the main actor. The execution
+        // itself is raced against the per-call timeout: a stuck tool must
+        // not stall the framework's loop (and the whole run) forever.
+        let codableInput = input.mapValues { AnyCodableValue(any: $0) }
+        let toolID = self.toolID
+        let context = self.context
+        let timeout = self.toolTimeout
+        let result: AssistToolResult = await withTaskGroup(of: AssistToolResult?.self) { group in
+            group.addTask {
+                do {
+                    let registry = await ToolsRegistry.shared
+                    return try await registry.execute(
+                        toolId: toolID,
+                        arguments: codableInput.mapValues(\.anyValue),
+                        context: context
+                    )
+                } catch {
+                    return .failure(error.localizedDescription, code: .executionFailed)
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            if let first {
+                return first
+            }
+            let limit = Int(GenerationRun.seconds(from: timeout).rounded(.up))
+            return .failure(
+                "The action did not finish within \(limit)s and was stopped. Its result is unknown — do not report it as done.",
+                code: .executionFailed
+            )
+        }
 
         onEvent?(.finished(toolID: toolID, result: result))
 

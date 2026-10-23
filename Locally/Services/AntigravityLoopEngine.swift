@@ -201,6 +201,34 @@ public enum AntigravityLoopEngine {
         return "narration|" + words.joined(separator: " ")
     }
 
+    /// A signature for ANY assistant text turn, narration or not: the
+    /// normalized words, order preserved, punctuation and case removed.
+    /// Two turns with the same signature are the same text for
+    /// progress purposes, however they are punctuated.
+    public nonisolated static func textTurnSignature(_ text: String) -> String {
+        let words = text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        return "text|" + words.joined(separator: " ")
+    }
+
+    /// How many times one run may produce the *same* assistant text turn
+    /// (same signature) while the loop continues past it — e.g. the same
+    /// tool-state sentence ("that tool was not called") or the same
+    /// rejected draft answer re-sent after a correction. One occurrence
+    /// is the turn itself; a repeat means nothing about the model's
+    /// situation changed when it said the same thing again, so the run
+    /// stops instead of re-asking. Tool-call repetition is bounded
+    /// separately (`maxIdenticalToolExecutions`); this bounds *text*
+    /// repetition, which the tool guard cannot see.
+    public nonisolated static let maxIdenticalTextTurns = 1
+
+    /// True when this text turn repeats one the run already produced —
+    /// i.e. the run is looping on prose, not progressing.
+    public nonisolated static func isRepeatedTextTurn(signature: String, previousSignatures: [String]) -> Bool {
+        previousSignatures.filter { $0 == signature }.count >= maxIdenticalTextTurns
+    }
+
     /// Canonical signature of one tool call for repetition detection.
     /// `canonicalArguments` must be a deterministic rendering of the
     /// arguments (the harness passes sorted-keys JSON).

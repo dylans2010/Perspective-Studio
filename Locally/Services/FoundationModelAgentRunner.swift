@@ -123,6 +123,10 @@ enum FoundationModelAgentRunner {
         workspaceRoot: URL,
         projectID: UUID? = nil,
         maxTurns: Int,
+        runID: UUID? = nil,
+        maxDuration: Duration = GenerationDefaults.maxAgentRunDuration,
+        maxToolExecutions: Int = AntigravityLoopEngine.maxToolExecutionsPerRun,
+        toolTimeout: Duration = ToolExecutor.defaultTimeout,
         dispatchStatus: @escaping @MainActor (AgentHarnessStatus) -> Void,
         addStep: @escaping @MainActor (AgentStep) -> Void,
         onEvent: (@MainActor (AgentHarnessEvent) -> Void)?,
@@ -144,6 +148,25 @@ enum FoundationModelAgentRunner {
         )
         let registry = ToolsRegistry.shared
 
+        // This run's deadline and cancellation scope. The framework
+        // drives the tool loop internally, so the bounds the MLX loop
+        // enforces turn-by-turn are enforced here at every point this
+        // runner controls: the stream loops check the deadline and the
+        // run's cancellation on every snapshot, and every tool execution
+        // goes through the shared per-run budget + timeout in the bridge.
+        let runStarted = ContinuousClock.now
+        func runExpired() -> Bool {
+            runStarted.duration(to: .now) > maxDuration
+        }
+        func runCancelled() -> Bool {
+            if Task.isCancelled { return true }
+            if let runID {
+                return AntigravityAgentHarness.shared.isRunCancelled(runID)
+            }
+            return false
+        }
+        let timeoutMessage = "I stopped this run at its time limit (\(Int(GenerationRun.seconds(from: maxDuration).rounded()))s). The steps from this run show what was completed before the limit; nothing after it ran."
+
         // Bridge callbacks run off the main actor; they hand events to a
         // Sendable stream that this (main-actor) runner drains into UI updates.
         let (toolEvents, toolEventsContinuation) = AsyncStream<FoundationModelToolEvent>.makeStream()
@@ -159,9 +182,10 @@ enum FoundationModelAgentRunner {
         let runToolIDs = intent == .conversational
             ? []
             : Self.runToolIDs(query: prompt, projectID: projectID, computerUseEnabled: ComputerUseSettings.isEnabled)
+        let toolBudget = ToolExecutionBudget(limit: maxToolExecutions)
         let bridges: [any Tool] = runToolIDs.compactMap { toolID in
             guard let tool = registry.tool(for: toolID) else { return nil }
-            return try? AssistToolBridge(tool: tool, context: context, onEvent: bridgeHandler)
+            return try? AssistToolBridge(tool: tool, context: context, budget: toolBudget, toolTimeout: toolTimeout, onEvent: bridgeHandler)
         }
 
         guard !bridges.isEmpty || intent == .conversational else {
@@ -221,11 +245,18 @@ enum FoundationModelAgentRunner {
         var previous = ""
         do {
             for try await snapshot in session.streamResponse(to: prompt, options: GenerationOptions(temperature: 0.4, maximumResponseTokens: GenerationDefaults.maxAppleModelOutputTokens)) {
-                if Task.isCancelled {
+                if runCancelled() {
                     eventPump.cancel()
                     toolEventsContinuation.finish()
                     dispatchStatus(.idle)
                     return AgentExecutionOutcome(answer: answer, steps: collector.steps, success: false)
+                }
+                if runExpired() {
+                    eventPump.cancel()
+                    toolEventsContinuation.finish()
+                    dispatchStatus(.failed(timeoutMessage))
+                    record(AgentStep(kind: .error, title: "Run Timed Out", detail: timeoutMessage))
+                    return AgentExecutionOutcome(answer: answer, steps: collector.steps, success: false, error: timeoutMessage)
                 }
                 let text = snapshot.content
                 let delta = text.hasPrefix(previous) ? String(text.dropFirst(previous.count)) : text
@@ -271,14 +302,18 @@ enum FoundationModelAgentRunner {
             dispatchStatus(.callingTool(name: "tree_view"))
             onEvent?(.toolCallDetected(tool: "tree_view", arguments: ["path": "."]))
             let exploration: AssistToolResult
-            do {
-                exploration = try await registry.execute(
-                    toolId: "tree_view",
-                    arguments: ["path": "."],
-                    context: context
-                )
-            } catch {
-                exploration = .failure(error.localizedDescription, code: .executionFailed)
+            if let treeTool = registry.tool(for: "tree_view"), toolBudget.claim() {
+                // The runner's own exploration is a tool execution like
+                // any other: it claims budget and runs under the per-call
+                // timeout instead of calling the registry unbounded.
+                exploration = await ToolExecutor.execute(
+                    tool: treeTool,
+                    arguments: ["path": .string(".")],
+                    context: context,
+                    timeout: toolTimeout
+                ).result
+            } else {
+                exploration = .failure("The project exploration could not run in this run.", code: .executionFailed)
             }
             dispatchStatus(.toolCompleted(name: "tree_view"))
             onEvent?(.toolExecutionFinished(tool: "tree_view", result: exploration))
@@ -292,8 +327,15 @@ enum FoundationModelAgentRunner {
 
             if exploration.success {
                 // The tree itself rides in the result's data; `output`
-                // alone is only the tool's one-line summary.
-                let treeText = exploration.data?["tree"] ?? exploration.output
+                // alone is only the tool's one-line summary. The tree is
+                // bounded before it rides into the grounding prompt: an
+                // unbounded project tree in a ~4K-token session is the
+                // context-growth failure in miniature, and the model
+                // can retrieve more with its tools if it needs it.
+                let rawTreeText = exploration.data?["tree"] ?? exploration.output
+                let treeText = rawTreeText.count > 6_000
+                    ? String(rawTreeText.prefix(6_000)) + "\n[project structure truncated to save context]"
+                    : rawTreeText
                 let groundingPrompt = """
                 You answered the user's request about the project "\(project.name)" without inspecting it. That draft is discarded. Here is the project's actual structure, from a real inspection just now:
 
@@ -305,7 +347,7 @@ enum FoundationModelAgentRunner {
                 var groundedAnswer = ""
                 do {
                     for try await snapshot in session.streamResponse(to: groundingPrompt, options: GenerationOptions(temperature: 0.4, maximumResponseTokens: GenerationDefaults.maxAppleModelOutputTokens)) {
-                        if Task.isCancelled { break }
+                        if runCancelled() || runExpired() { break }
                         let text = snapshot.content
                         let delta = text.hasPrefix(groundedPrevious) ? String(text.dropFirst(groundedPrevious.count)) : text
                         groundedPrevious = text

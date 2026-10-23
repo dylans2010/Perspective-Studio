@@ -36,6 +36,38 @@ public enum GenerationDefaults {
     /// ~4K tokens total — the answer must leave room for the prompt.
     public nonisolated static let maxAppleModelOutputTokens = 1_024
 
+    // MARK: - Duration limits
+    //
+    // Token caps bound *length*; they do not bound *time*. A model that
+    // dribbles tokens, a backend that hangs before its first token, or an
+    // agent loop that keeps making progress-shaped turns can each run
+    // until the user force-quits — the "generation continues for an
+    // excessive amount of time and the app becomes unresponsive" failure.
+    // These wall-clock limits are enforced by the generation loops and
+    // stream wrappers themselves (`StreamTimeout`, the harness's run
+    // deadline, the engine actor's per-token checks), never merely
+    // described to the model. A limit hit is a terminal state with an
+    // explanation; work completed before it is preserved.
+
+    /// Hard wall-clock cap for one Chat / Quick Chat generation.
+    public nonisolated static let maxChatGenerationDuration: Duration = .seconds(300)
+
+    /// Hard wall-clock cap for one model turn inside an agent run. A
+    /// single turn that cannot finish in this time is stuck, not slow.
+    public nonisolated static let maxAgentTurnDuration: Duration = .seconds(180)
+
+    /// Hard wall-clock cap for a whole agent run, across all its turns
+    /// and tool executions. Generous enough for real multi-step tasks;
+    /// finite, so no run is unbounded.
+    public nonisolated static let maxAgentRunDuration: Duration = .seconds(600)
+
+    /// Minimum interval between streamed-text writes into the visible
+    /// message. Token-by-token writes re-sanitize and re-render the whole
+    /// accumulated response per token (quadratic in response length);
+    /// flushing on this cadence keeps the UI responsive without changing
+    /// what is finally rendered.
+    public nonisolated static let streamFlushInterval: TimeInterval = 0.08
+
     /// Resolves an optional caller temperature to the effective value.
     public nonisolated static func temperature(_ caller: Double?) -> Double {
         guard let caller, caller.isFinite, caller >= 0 else { return conversationalTemperature }

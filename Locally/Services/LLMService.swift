@@ -14,6 +14,17 @@ actor LLMService {
     private var isVLM = false
     private var isLoading = false
     private var currentModelID: String?
+    /// Cancellation is per-stream, not a service-wide flag: each stream's
+    /// generation task answers to its own Swift Task cancellation, and
+    /// the stream's `onTermination` tears that task down when the
+    /// consumer cancels or drops the stream. The old mechanism was this
+    /// one shared `isCancelled` Bool — every new generation reset it to
+    /// `false`, which silently un-cancelled a stop aimed at the previous
+    /// run, and a `cancel()` could just as easily kill a newer run it was
+    /// never aimed at. The flag remains only as a legacy service-wide
+    /// backstop for `cancel()`'s existing caller (the comparison view's
+    /// stop, which also cancels its own task — the per-stream chain is
+    /// what actually stops its generation).
 
     func currentlyLoadedModelID() -> String? {
         currentModelID
@@ -88,11 +99,18 @@ actor LLMService {
         isCancelled = false
 
         return AsyncStream { continuation in
-            Task {
+            let task = Task {
+                let started = ContinuousClock.now
                 do {
                     let stream = session.streamResponse(to: prompt, images: [], videos: [])
                     for try await token in stream {
-                        if self.isCancelled { break }
+                        // This stream's own cancellation first — the
+                        // shared flag is only a service-wide backstop.
+                        if Task.isCancelled || self.isCancelled { break }
+                        // Duration backstop at the engine layer: no
+                        // single generation may exceed the chat limit,
+                        // whichever caller opened the stream.
+                        if started.duration(to: .now) > GenerationDefaults.maxChatGenerationDuration { break }
                         continuation.yield(token)
                     }
                     continuation.finish()
@@ -100,6 +118,7 @@ actor LLMService {
                     continuation.finish()
                 }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -193,11 +212,13 @@ actor LLMService {
         let images: [UserInput.Image] = imageURLs.map { .url($0) }
 
         return AsyncStream { continuation in
-            Task {
+            let task = Task {
+                let started = ContinuousClock.now
                 do {
                     let stream = session.streamResponse(to: lastUserMessage, images: images, videos: videos)
                     for try await token in stream {
-                        if self.isCancelled { break }
+                        if Task.isCancelled || self.isCancelled { break }
+                        if started.duration(to: .now) > GenerationDefaults.maxChatGenerationDuration { break }
                         continuation.yield(token)
                     }
                     continuation.finish()
@@ -205,6 +226,7 @@ actor LLMService {
                     continuation.finish()
                 }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -216,8 +238,14 @@ actor LLMService {
         // Use a temporary session so we do not pollute the main chat history
         let session = ChatSession(container)
         var result = ""
+        let started = ContinuousClock.now
         let stream = session.streamResponse(to: prompt, images: [], videos: [])
         for try await token in stream {
+            // Summarization is part of a run: it obeys the run's
+            // cancellation and the same duration limit as any generation
+            // instead of running unbounded inside a chat turn.
+            if Task.isCancelled { break }
+            if started.duration(to: .now) > GenerationDefaults.maxChatGenerationDuration { break }
             result += token
         }
         return result
@@ -226,6 +254,11 @@ actor LLMService {
     func cancel() {
         isCancelled = true
     }
+
+    /// Service-wide stop (legacy): sets the backstop flag every live
+    /// stream checks per token. Per-run callers should cancel their own
+    /// consuming task instead — that stops exactly their stream through
+    /// its `onTermination`, never a newer run.
 
     func unloadModel() {
         modelContainer = nil
