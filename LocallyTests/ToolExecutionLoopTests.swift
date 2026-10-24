@@ -34,6 +34,28 @@ final class ToolExecutionLoopTests: XCTestCase {
         XCTAssertEqual(call.toolID, "calculator", "the canonical registry id is used, not the model's spelling")
     }
 
+    func testFileCreateResolvesAndInventedCreateXcodeProjectIsRejected() {
+        let fileCatalog = ToolCatalog(tools: [AssistCreateFileTool()])
+        let accepted = ToolCallValidator.validate(
+            toolID: "file_create",
+            arguments: ["path": .string("main.swift"), "content": .string("print(\"hi\")")],
+            catalog: fileCatalog
+        )
+        guard case .accepted(let call) = accepted else {
+            return XCTFail("the registered file_create tool must validate")
+        }
+        XCTAssertEqual(call.toolID, "file_create")
+
+        let invented = ToolCallValidator.validate(
+            toolID: "createXcodeProject",
+            arguments: ["name": .string("App")],
+            catalog: fileCatalog
+        )
+        guard case .rejected(.unknownTool) = invented else {
+            return XCTFail("a fabricated tool name must be rejected, never dispatched")
+        }
+    }
+
     func testUnknownToolIsRejectedBeforeExecution() {
         let outcome = ToolCallValidator.validate(
             toolID: "nsuserdebug",

@@ -958,7 +958,7 @@ public final class AntigravityAgentHarness {
         ## Workspace — where file actions happen:
         - This run's workspace folder is: \(workspaceRoot.path)
         - Relative paths in tool arguments resolve inside that folder. "This directory", "the current directory", and "here" in the user's request mean exactly that folder — nowhere else.
-        - To create a file the user named with a plain filename (for example `main.swift`) in "this directory", call the file-creation tool with that filename as its path argument and the file's full content. Do not invent a different folder, and do not describe a shell or debugger command instead — no such capability exists here.
+        - To create a file the user named with a plain filename (for example `main.swift`) in "this directory", call the file-creation tool `file_create` (exact id, used in the TOOL_CALL line) with that filename as its `path` argument and the file's full content. Do not invent a different folder, and do not describe a shell or debugger command instead — no such capability exists here.
         - When you create or change files, say in your final answer which folder they are in, in plain language.
 
         ## Core Operational Guidelines:

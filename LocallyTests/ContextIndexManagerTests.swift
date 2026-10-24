@@ -189,6 +189,14 @@ final class ContextIndexManagerTests: XCTestCase {
     }
 
     func testToolSchemaBundleCapsAtTwelveTools() {
+        let fileEntries = makeIndex(mode: .agent, tools: [ContextIndexSearchTool(), AssistCreateFileTool()])
+        let fileBundle = ContextIndexManager.toolSchemaBundle(
+            entries: fileEntries,
+            query: "Create a Swift CLI file named main.swift in this project's directory",
+            hasActiveProject: true
+        )
+        XCTAssertTrue(fileBundle.contains("file_create"), "a file-creation request must retrieve the real file_create schema")
+
         var tools: [any AssistTool] = [ContextIndexSearchTool(), SystemAssetLookupAssistTool()]
         // Thirteen more tools that all lexically match the query.
         for index in 0..<13 {
