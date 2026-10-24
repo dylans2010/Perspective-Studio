@@ -19,6 +19,7 @@ tags: tools, validation, error-handling, safety, parameters
   ```
   TOOL_CALL {"tool": "<tool_id>", "arguments": {"key": "value"}}
   ```
+  The transport is valid only as one standalone, unfenced line containing that payload and nothing else. A mention in prose, an example, a quote, a code fence, or a line with trailing commentary is content for the user — never a request to dispatch.
 - **Registered ids only.** An id that is not in your tool set does not exist here and will be refused. If you are unsure of an id or its arguments, retrieve the schema from the context index first.
 - **No Side-Channel Execution**: Do not assume tools accept arbitrary shell escapes or undeclared options. Any parameter not explicitly permitted by the tool registry will cause rejection.
 - **No shell by implication.** This runtime has no terminal, shell, or debugger capability unless such a tool is actually present in your tool set. Writing a command — in prose, backticks, or a fenced block — does not execute it, and no result will appear.

@@ -243,7 +243,7 @@ enum FoundationModelAgentRunner {
 
         dispatchStatus(.thinking)
 
-        let instructions = buildInstructions(additionalSystemPrompt: additionalSystemPrompt)
+        let instructions = buildInstructions(intent: intent, additionalSystemPrompt: additionalSystemPrompt)
         let session = LanguageModelSession(tools: bridges, instructions: instructions)
 
         var answer = ""
@@ -384,11 +384,18 @@ enum FoundationModelAgentRunner {
         return AgentExecutionOutcome(answer: answer, steps: collector.steps, success: true)
     }
 
-    private static func buildInstructions(additionalSystemPrompt: String? = nil) -> String {
+    private static func buildInstructions(intent: ConversationIntent, additionalSystemPrompt: String? = nil) -> String {
         // Counts-only directory from the context index — never the full
         // asset index or any catalog. Full entries are retrieved on
         // demand through the offered lookup tools.
-        let directory = ContextIndexManager.directoryText(mode: .agent)
+        // Direct and conversational turns deliberately receive no capability
+        // directory. Even a counts-only tool index primes a small model to
+        // narrate a tool/status response instead of simply answering "who are
+        // you?" or a greeting. Task turns retain the directory because they
+        // may actually use the native tool bridge.
+        let directory = intent.allowsToolMachinery
+            ? ContextIndexManager.directoryText(mode: .agent)
+            : ""
         let sdkLine = AntigravitySDKBundle.agentModeContextLine(status: AntigravitySDKBundle.status())
         let indexLine = "Models, tools, and system prompts here are Locally's own, served from the local context index — the bundled SDK provides only the agent-loop design, never models, tools, or prompts."
         let computerLine = ComputerUseSettings.isEnabled
@@ -405,10 +412,10 @@ enum FoundationModelAgentRunner {
         \(computerLine)
 
         ## How to work
-        1. Use a tool whenever the task needs real files, device facts, arithmetic, or guidelines. Do not guess file contents or system details.
-        2. Read the tool result, then either call another tool or give the final answer.
-        3. When a system guideline would help, retrieve it with the system asset lookup instead of inventing rules.
-        4. Never mention a tool's name or id in your answer. The app shows your tool activity in its own cards; in your text, describe actions and findings in plain language ("I read the file", "I searched the project").
+        1. Use a tool only when one is available and the task needs real files, device facts, arithmetic, or guidelines. Do not guess file contents or system details.
+        2. Read a real tool result before relying on it, then either call another tool or give the final answer.
+        3. Never mention a tool's name or id in your answer. The app shows tool activity separately; in your text, describe actions and findings in plain language.
+        4. If no tools are offered for this turn, answer the user directly. Do not emit, invent, or imitate a tool call, tool status, debugger message, or internal runtime output.
         5. If a project is active (its context appears below), you MUST call tools for it: explore the project first, ground every claim in a result from this run, and record durable facts in the project's memory. A tool-less answer about a project is rejected by the runtime.
 
         \(directory)

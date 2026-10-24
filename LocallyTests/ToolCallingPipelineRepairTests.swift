@@ -354,12 +354,37 @@ private final class PipelineScriptedBackend: InferenceBackend, @unchecked Sendab
                     continuation.yield(.token(String(response[index..<end])))
                     index = end
                 }
-                var metrics = GenerationMetrics()
-                metrics.outputTokens = response.count
-                continuation.yield(.finished(metrics))
+                continuation.yield(.finished(GenerationMetrics()))
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+extension ToolCallingPipelineRepairTests {
+    /// A protocol token mentioned as content is not an instruction to execute.
+    func testToolCallDecoderRequiresStandalonePayloadLine() {
+        let prose = "You can write TOOL_CALL {\"tool\": \"calculator\", \"arguments\": {\"expression\": \"2+2\"}} to invoke a tool."
+        XCTAssertNil(AntigravityAgentHarness.parseToolCall(in: prose))
+
+        let fenced = """
+        Here is an example:
+        ```json
+        TOOL_CALL {"tool": "calculator", "arguments": {"expression": "2+2"}}
+        ```
+        """
+        XCTAssertNil(AntigravityAgentHarness.parseToolCall(in: fenced))
+
+        let canonical = "TOOL_CALL {\"tool\": \"calculator\", \"arguments\": {\"expression\": \"2+2\"}}"
+        XCTAssertEqual(AntigravityAgentHarness.parseToolCall(in: canonical)?.toolId, "calculator")
+    }
+
+    func testProseMentionOfProtocolRemainsAFinalAnswer() {
+        let catalog = ToolCatalog(tools: [CalculatorAssistTool()])
+        let prose = "Do not paste TOOL_CALL {\"tool\": \"calculator\"} into chat; it is an internal protocol."
+        guard case .finalAnswer = AntigravityLoopEngine.decide(turnText: prose, catalog: catalog) else {
+            return XCTFail("prose must not enter the tool dispatcher")
         }
     }
 }

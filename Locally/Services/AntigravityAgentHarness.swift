@@ -1114,11 +1114,28 @@ public final class AntigravityAgentHarness {
     /// an executed call. Extraction here is purely syntactic — identity and
     /// arguments are validated afterwards by `ToolCallValidator`.
     public nonisolated static func parseToolCall(in text: String) -> (toolId: String, arguments: [String: Any])? {
-        if let marker = text.range(of: "TOOL_CALL", options: .caseInsensitive) {
-            let remainder = text[marker.upperBound...]
-            if let start = remainder.firstIndex(of: "{"),
-               let data = balancedJSON(in: remainder[start...]),
-               let parsed = decodeToolCallData(data) {
+        // The text protocol is a transport channel, not a substring search.
+        // A model may explain or quote `TOOL_CALL` in ordinary prose or in a
+        // fenced example; treating that as an invocation is both surprising
+        // and unsafe. Accept only a standalone protocol line (allowing
+        // indentation), exactly as the agent prompt specifies.
+        var insideCodeFence = false
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("```") {
+                insideCodeFence.toggle()
+                continue
+            }
+            guard !insideCodeFence, trimmed.uppercased().hasPrefix("TOOL_CALL") else { continue }
+            let suffix = trimmed.dropFirst("TOOL_CALL".count)
+            guard suffix.first?.isWhitespace == true else { continue }
+            let remainder = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard remainder.first == "{",
+                  let data = balancedJSON(in: remainder[...]),
+                  let parsed = decodeToolCallData(data) else { continue }
+            // A transport line contains only the payload; trailing prose
+            // makes it a display/example line rather than a dispatch.
+            if let payload = String(data: data, encoding: .utf8), remainder == payload {
                 return parsed
             }
         }
@@ -1142,7 +1159,18 @@ public final class AntigravityAgentHarness {
     /// an answer: printing it would leak protocol text and executing it would
     /// be guesswork.
     public nonisolated static func containsToolCallChannel(_ text: String) -> Bool {
-        if text.range(of: "TOOL_CALL", options: .caseInsensitive) != nil { return true }
+        var insideCodeFence = false
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("```") {
+                insideCodeFence.toggle()
+                continue
+            }
+            if !insideCodeFence, trimmed.uppercased().hasPrefix("TOOL_CALL"),
+               trimmed.dropFirst("TOOL_CALL".count).first?.isWhitespace == true {
+                return true
+            }
+        }
         for tag in ["tool_call", "function_call"] where text.range(of: "<\(tag)", options: .caseInsensitive) != nil {
             return true
         }
