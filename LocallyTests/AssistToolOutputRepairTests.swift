@@ -170,6 +170,33 @@ final class AssistToolOutputRepairTests: XCTestCase {
         XCTAssertTrue(bothResult.output.contains("AssistMainView.swift"))
     }
 
+    func testFileSearchFilenameMatchNotCrowdedOutByContentMatches() async throws {
+        // Regression test for the reported AssistMainView-style failure:
+        // with a small budget and many files that merely *mention* the
+        // target name, a "both" search must still surface the file itself.
+        // The old single-bucket implementation let content hits enumerated
+        // first consume the whole budget, so the filename match could be
+        // dropped entirely depending on enumeration order.
+        let viewsDir = tempDir.appendingPathComponent("Views", isDirectory: true)
+        try FileManager.default.createDirectory(at: viewsDir, withIntermediateDirectories: true)
+        let target = viewsDir.appendingPathComponent("AssistMainView.swift")
+        try "struct AssistMainView: View { var body: some View { Text(\"x\") } }".write(to: target, atomically: true, encoding: .utf8)
+        for index in 0..<10 {
+            let decoy = tempDir.appendingPathComponent("Decoy\(index).swift")
+            try "/// References AssistMainView in a comment.\nlet ref = \"AssistMainView\"".write(to: decoy, atomically: true, encoding: .utf8)
+        }
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = FileSearchAssistTool()
+        let result = try await tool.execute(input: ["query": "AssistMainView", "maxResults": 3], context: context)
+        XCTAssertTrue(result.success)
+        // The filename match must be present and first, whatever order
+        // the filesystem enumerated the decoys in.
+        XCTAssertTrue(result.output.contains("[Filename match] Views/AssistMainView.swift"), "Output was: \(result.output)")
+        XCTAssertTrue(result.output.hasPrefix("[Filename match] Views/AssistMainView.swift"), "Filename match must lead the output, got: \(result.output)")
+        XCTAssertEqual(result.data?["filenameCount"], "1")
+    }
+
     func testFileSearchToolDirectoryPruningAndIncludeIgnored() async throws {
         // Create files in build and .git directories
         let buildDir = tempDir.appendingPathComponent("build/DerivedData", isDirectory: true)

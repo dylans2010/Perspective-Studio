@@ -280,7 +280,7 @@ public struct HardwareInfoAssistTool: AssistTool {
 public struct FileSearchAssistTool: AssistTool {
     public let id = "file_search"
     public let name = "Authorized File Search"
-    public let description = "Search file names and text contents inside the workspace or authorized folders. Parameters: query, searchType ('filename', 'content', 'both'), extension, path, includeIgnored, maxResults."
+    public let description = "Search file names and text contents inside the workspace or authorized folders. Filename matches are returned before content matches, so a target file is never crowded out by content references to it. Parameters: query, searchType ('filename', 'content', 'both'), extension, path, includeIgnored, maxResults."
     public let capability = ToolCapability.fileReading
     public let riskLevel = ToolRiskLevel.safeRead
 
@@ -350,9 +350,20 @@ public struct FileSearchAssistTool: AssistTool {
         let needle = query.lowercased()
         let workspaceRoot = context.workspaceRoot
 
+        // Filename matches are collected in their own bucket and emitted
+        // before content matches. Previously a single shared budget meant
+        // content hits in files enumerated early could crowd out the actual
+        // target file (e.g. searching for "AssistMainView" could return 50
+        // content references and never surface AssistMainView.swift itself
+        // in a nested Views/ directory). Separating the buckets and sorting
+        // filename matches first makes exact/partial filename discovery
+        // deterministic regardless of enumeration order.
         let matches = await Task.detached(priority: .userInitiated) { () -> [String] in
             let fm = FileManager.default
-            var results: [String] = []
+            var filenameMatches: [String] = []
+            var contentMatches: [String] = []
+            let filenameCap = searchType == "content" ? 0 : maxResults
+            let contentCap = searchType == "filename" ? 0 : maxResults
             let textExtensions: Set<String> = [
                 "txt", "md", "swift", "json", "csv", "log", "py", "ts", "js",
                 "html", "xml", "yaml", "yml", "h", "c", "cpp", "hpp", "m", "mm",
@@ -365,7 +376,7 @@ public struct FileSearchAssistTool: AssistTool {
             ]
 
             for folder in searchFolders {
-                if results.count >= maxResults { break }
+                if filenameMatches.count >= filenameCap && contentMatches.count >= contentCap { break }
                 let options: FileManager.DirectoryEnumerationOptions = includeIgnored ? [] : [.skipsHiddenFiles]
                 guard let enumerator = fm.enumerator(
                     at: folder,
@@ -374,7 +385,7 @@ public struct FileSearchAssistTool: AssistTool {
                 ) else { continue }
 
                 while let fileURL = enumerator.nextObject() as? URL {
-                    if results.count >= maxResults { break }
+                    if filenameMatches.count >= filenameCap && contentMatches.count >= contentCap { break }
                     let name = fileURL.lastPathComponent
                     guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]) else {
                         continue
@@ -403,12 +414,17 @@ public struct FileSearchAssistTool: AssistTool {
                     var matchedFilename = false
                     if searchType == "filename" || searchType == "both" {
                         if name.localizedCaseInsensitiveContains(needle) {
-                            results.append("[Filename match] \(relativePath)")
+                            if filenameMatches.count < filenameCap {
+                                filenameMatches.append("[Filename match] \(relativePath)")
+                            }
                             matchedFilename = true
                         }
                     }
 
-                    if (searchType == "content" || (searchType == "both" && !matchedFilename)) && results.count < maxResults {
+                    // Once the content bucket is full, keep walking for
+                    // filename matches but skip reading further files: the
+                    // walk itself is cheap, file reads are not.
+                    if (searchType == "content" || (searchType == "both" && !matchedFilename)) && contentMatches.count < contentCap {
                         let pathExt = fileURL.pathExtension.lowercased()
                         if textExtensions.contains(pathExt) || (!binaryExtensions.contains(pathExt) && pathExt != "") {
                             if let size = resourceValues.fileSize, size <= 2_000_000,
@@ -418,9 +434,9 @@ public struct FileSearchAssistTool: AssistTool {
                                     if line.localizedCaseInsensitiveContains(needle) {
                                         let trimmedLine = line.trimmingCharacters(in: .whitespaces)
                                         let snippet = trimmedLine.count > 120 ? String(trimmedLine.prefix(120)) + "…" : trimmedLine
-                                        results.append("[Content match] \(relativePath):\(lineIndex + 1): \(snippet)")
+                                        contentMatches.append("[Content match] \(relativePath):\(lineIndex + 1): \(snippet)")
                                         fileMatchCount += 1
-                                        if fileMatchCount >= 5 || results.count >= maxResults { break }
+                                        if fileMatchCount >= 5 || contentMatches.count >= contentCap { break }
                                     }
                                 }
                             }
@@ -428,7 +444,10 @@ public struct FileSearchAssistTool: AssistTool {
                     }
                 }
             }
-            return results
+            // Filename matches first, sorted for deterministic output, then
+            // content matches, truncated to the single requested budget.
+            let combined = (filenameMatches.sorted() + contentMatches.sorted())
+            return Array(combined.prefix(maxResults))
         }.value
 
         let extInfo = (extFilter?.isEmpty == false) ? " [extension: .\(extFilter!)]" : ""
@@ -448,6 +467,8 @@ public struct FileSearchAssistTool: AssistTool {
         return .success(output, data: [
             "query": query,
             "count": "\(matches.count)",
+            "filenameCount": "\(matches.filter { $0.hasPrefix("[Filename match]") }.count)",
+            "contentCount": "\(matches.filter { $0.hasPrefix("[Content match]") }.count)",
             "searchType": searchType,
             "path": pathArg,
             "matches": output

@@ -7,7 +7,7 @@ import os
 public struct AssistTerminalTool: AssistTool {
     public let id: String
     public let name = "Terminal Shell Execution"
-    public let description = "Executes a shell command via /bin/zsh in the workspace directory. Captures stdout, stderr, exit code, and execution time. Defaults to session working directory when workingDirectory is omitted."
+    public let description = "Executes a shell command via /bin/zsh in the workspace directory. Captures stdout, stderr, exit code, and execution time. Defaults to session working directory when workingDirectory is omitted. Do not assume rg, fd, or other developer tools exist: check availability first (e.g. `command -v rg`) and fall back to the native file_search / search_text tools when a tool is missing."
 
     public init(id: String = "use_terminal") {
         self.id = id
@@ -347,6 +347,12 @@ private enum TerminalSecurityGuard {
         ("\\brm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+/(?:\\s*|\\*)", "Destructive recursive deletion of system root ('rm -rf /') is forbidden."),
         ("\\brm\\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\\s+/(?:\\s*|\\*)", "Destructive recursive deletion of system root ('rm -rf /') is forbidden."),
         ("\\brm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+~", "Destructive deletion of user home directory is forbidden."),
+        ("\\brm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+\\.(?:\\s|;|$)", "Destructive recursive deletion of the working directory ('rm -rf .') is forbidden."),
+        ("\\brm\\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\\s+\\.(?:\\s|;|$)", "Destructive recursive deletion of the working directory ('rm -fr .') is forbidden."),
+        ("\\brm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+\\.\\.(?:\\s|;|/|$)", "Destructive recursive deletion of a parent directory ('rm -rf ..') is forbidden."),
+        ("\\brm\\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\\s+\\.\\.(?:\\s|;|/|$)", "Destructive recursive deletion of a parent directory ('rm -fr ..') is forbidden."),
+        ("\\brm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+\\*(?:\\s|;|$)", "Destructive recursive deletion of the working directory contents ('rm -rf *') is forbidden."),
+        ("\\brm\\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\\s+\\*(?:\\s|;|$)", "Destructive recursive deletion of the working directory contents ('rm -fr *') is forbidden."),
         ("\\bdiskutil\\s+(eraseDisk|partitionDisk|zeroDisk|randomDisk|secureErase|apfs\\s+deleteVolume)", "Disk modification and formatting via diskutil is forbidden."),
         ("\\b(mkfs|newfs)\\b", "Filesystem creation/formatting commands are forbidden."),
         ("\\bdd\\s+if=", "Low-level block device manipulation with 'dd' is forbidden."),
