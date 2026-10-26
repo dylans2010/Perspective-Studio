@@ -1,6 +1,7 @@
 import XCTest
 @testable import Locally
 
+@MainActor
 final class AssistToolOutputRepairTests: XCTestCase {
 
     private var tempDir: URL!
@@ -111,7 +112,7 @@ final class AssistToolOutputRepairTests: XCTestCase {
         let matchResult = try await tool.execute(input: ["pattern": "foo\\d+bar"], context: context)
         XCTAssertTrue(matchResult.success)
         XCTAssertTrue(matchResult.output.contains("Regex search results for 'foo\\d+bar':"))
-        XCTAssertTrue(matchResult.output.contains("regex_target.txt:foo123bar"))
+        XCTAssertTrue(matchResult.output.contains("regex_target.txt:1: foo123bar"))
 
         // No match case
         let noMatchResult = try await tool.execute(input: ["pattern": "missing_pattern_\\d+"], context: context)
