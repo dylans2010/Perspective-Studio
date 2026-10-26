@@ -42,6 +42,70 @@ public struct ToolCallRecord: Identifiable, Sendable, Equatable {
         return nil
     }
 
+    /// A concise human-readable summary of the tool's primary target or input (e.g. filename, query, symbol).
+    public nonisolated var contextualSummary: String? {
+        // Query / Search Pattern
+        if let query = arguments["query"] ?? arguments["pattern"],
+           !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            let preview = trimmed.count > 35 ? "\(trimmed.prefix(32))..." : trimmed
+            return "'\(preview)'"
+        }
+
+        // Code Symbol
+        if let symbol = arguments["symbol"] ?? arguments["symbol_name"],
+           !symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Terminal Command
+        if let command = arguments["command"] ?? arguments["cmd"],
+           !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let firstLine = command.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespaces) ?? command
+            let preview = firstLine.count > 35 ? "\(firstLine.prefix(32))..." : firstLine
+            return preview
+        }
+
+        // Arithmetic / Code Expression
+        if let expression = arguments["expression"] ?? arguments["expr"],
+           !expression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+            let preview = trimmed.count > 35 ? "\(trimmed.prefix(32))..." : trimmed
+            return preview
+        }
+
+        // File or Directory Path
+        if let path = arguments["path"]
+            ?? arguments["file"]
+            ?? arguments["filePath"]
+            ?? arguments["file_path"]
+            ?? arguments["target_path"]
+            ?? arguments["destination"]
+            ?? arguments["source"]
+            ?? arguments["filename"]
+            ?? arguments["dir"]
+            ?? arguments["directory"],
+           !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            let last = URL(fileURLWithPath: trimmed).lastPathComponent
+            return last.isEmpty ? trimmed : last
+        }
+
+        // Explicit Operation
+        if let operation = arguments["operation"] ?? arguments["op"],
+           !operation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return operation.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // System Asset Identifier
+        if let assetID = arguments["asset_id"],
+           !assetID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return assetID.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return nil
+    }
+
     private nonisolated func formatSeconds(_ seconds: TimeInterval) -> String {
         if seconds < 0.05 {
             return "<0.1s"

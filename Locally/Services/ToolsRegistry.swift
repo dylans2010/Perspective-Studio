@@ -280,16 +280,21 @@ public struct HardwareInfoAssistTool: AssistTool {
 public struct FileSearchAssistTool: AssistTool {
     public let id = "file_search"
     public let name = "Authorized File Search"
-    public let description = "Search file names and text contents inside authorized folders or the active workspace. Argument: query."
+    public let description = "Search file names and text contents inside the workspace or authorized folders. Parameters: query, searchType ('filename', 'content', 'both'), extension, path, includeIgnored, maxResults."
     public let capability = ToolCapability.fileReading
     public let riskLevel = ToolRiskLevel.safeRead
 
     public var parametersSchema: JSONSchema {
         JSONSchema(
             type: "object",
-            description: "Searches authorized folders for files matching the given query.",
+            description: "Searches authorized folders or workspace for files matching the given query.",
             properties: [
-                "query": JSONSchema(type: "string", description: "Search query string or filename pattern.")
+                "query": JSONSchema(type: "string", description: "Search query string or filename pattern."),
+                "searchType": JSONSchema(type: "string", description: "Type of search: 'filename', 'content', or 'both' (default: 'both').", enumValues: ["filename", "content", "both"]),
+                "extension": JSONSchema(type: "string", description: "Optional file extension filter (e.g. 'swift', 'json')."),
+                "path": JSONSchema(type: "string", description: "Workspace-relative folder path to search in (default: '.')."),
+                "includeIgnored": JSONSchema(type: "boolean", description: "Whether to include build/cache directories (default: false)."),
+                "maxResults": JSONSchema(type: "integer", description: "Maximum number of search results to return (default: 50).")
             ],
             required: ["query"]
         )
@@ -303,43 +308,150 @@ public struct FileSearchAssistTool: AssistTool {
             return .failure("Missing required parameter: 'query'.", code: .missingArgument)
         }
 
-        var searchFolders: [URL] = ToolsRegistry.shared.authorizedFolders
-        if !searchFolders.contains(where: { $0.path == context.workspaceRoot.path }) {
-            searchFolders.append(context.workspaceRoot)
+        let rawSearchType = ((input["searchType"] ?? input["type"]) as? String)?.lowercased() ?? "both"
+        let searchType: String
+        if rawSearchType == "filename" || rawSearchType == "content" || rawSearchType == "both" {
+            searchType = rawSearchType
+        } else {
+            searchType = "both"
+        }
+
+        let rawExt = (input["extension"] ?? input["fileExtension"] ?? input["ext"]) as? String
+        let extFilter = rawExt?.trimmingCharacters(in: CharacterSet(charactersIn: ". \t\n\r")).lowercased()
+
+        let pathArg = (input["path"] as? String) ?? "."
+        let includeIgnored = (input["includeIgnored"] as? Bool) ?? false
+        let maxResults: Int
+        if let rawMax = input["maxResults"] as? Int {
+            maxResults = max(1, min(rawMax, 200))
+        } else if let rawMaxD = input["maxResults"] as? Double {
+            maxResults = max(1, min(Int(rawMaxD), 200))
+        } else {
+            maxResults = 50
+        }
+
+        let searchFolder: URL
+        do {
+            searchFolder = try context.fileSystem.resolve(pathArg)
+        } catch {
+            return .failure("Invalid search path '\(pathArg)': \(error.localizedDescription)", code: .invalidInput)
+        }
+
+        var searchFolders: [URL] = [searchFolder]
+        if pathArg == "." {
+            let authorized = await MainActor.run { ToolsRegistry.shared.authorizedFolders }
+            for folder in authorized {
+                if !searchFolders.contains(where: { $0.path == folder.path }) {
+                    searchFolders.append(folder)
+                }
+            }
         }
 
         let needle = query.lowercased()
-        let resultText = await Task.detached(priority: .userInitiated) {
+        let workspaceRoot = context.workspaceRoot
+
+        let matches = await Task.detached(priority: .userInitiated) { () -> [String] in
             let fm = FileManager.default
-            var matches: [String] = []
-            var scanned = 0
-            let textExtensions: Set<String> = ["txt", "md", "swift", "json", "csv", "log", "py", "ts", "js", "html", "xml", "yaml", "yml"]
+            var results: [String] = []
+            let textExtensions: Set<String> = [
+                "txt", "md", "swift", "json", "csv", "log", "py", "ts", "js",
+                "html", "xml", "yaml", "yml", "h", "c", "cpp", "hpp", "m", "mm",
+                "sh", "rb", "toml", "ini", "strings", "xcconfig", "plist"
+            ]
+            let binaryExtensions: Set<String> = [
+                "png", "jpg", "jpeg", "gif", "ico", "pdf", "zip", "tar", "gz",
+                "dylib", "a", "o", "so", "bin", "exe", "dmg", "pkg", "car", "nib",
+                "storyboardc", "ds_store"
+            ]
 
             for folder in searchFolders {
-                guard let enumerator = fm.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) else { continue }
-                while let fileURL = enumerator.nextObject() as? URL {
-                    if matches.count >= 25 || scanned >= 600 { break }
-                    scanned += 1
+                if results.count >= maxResults { break }
+                let options: FileManager.DirectoryEnumerationOptions = includeIgnored ? [] : [.skipsHiddenFiles]
+                guard let enumerator = fm.enumerator(
+                    at: folder,
+                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey],
+                    options: options
+                ) else { continue }
 
-                    if fileURL.lastPathComponent.lowercased().contains(needle) {
-                        matches.append("Name match: \(fileURL.path)")
+                while let fileURL = enumerator.nextObject() as? URL {
+                    if results.count >= maxResults { break }
+                    let name = fileURL.lastPathComponent
+                    guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]) else {
                         continue
                     }
 
-                    guard textExtensions.contains(fileURL.pathExtension.lowercased()),
-                          let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 2_000_000,
-                          let contents = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
+                    if resourceValues.isDirectory == true {
+                        if !includeIgnored && AssistWorkspaceScan.skippedDirs.contains(name) {
+                            enumerator.skipDescendants()
+                        }
+                        continue
+                    }
 
-                    for (lineIndex, line) in contents.components(separatedBy: "\n").enumerated() where line.lowercased().contains(needle) {
-                        matches.append("\(fileURL.lastPathComponent):\(lineIndex + 1): \(line.trimmingCharacters(in: .whitespaces).prefix(120))")
-                        break
+                    guard resourceValues.isRegularFile == true else { continue }
+                    if !includeIgnored && AssistWorkspaceScan.skippedDirs.contains(name) {
+                        continue
+                    }
+
+                    if let extFilter = extFilter, !extFilter.isEmpty {
+                        if fileURL.pathExtension.lowercased() != extFilter {
+                            continue
+                        }
+                    }
+
+                    let relativePath = AssistToolingSupport.relativePath(for: fileURL, workspaceRoot: workspaceRoot)
+
+                    var matchedFilename = false
+                    if searchType == "filename" || searchType == "both" {
+                        if name.localizedCaseInsensitiveContains(needle) {
+                            results.append("[Filename match] \(relativePath)")
+                            matchedFilename = true
+                        }
+                    }
+
+                    if (searchType == "content" || (searchType == "both" && !matchedFilename)) && results.count < maxResults {
+                        let pathExt = fileURL.pathExtension.lowercased()
+                        if textExtensions.contains(pathExt) || (!binaryExtensions.contains(pathExt) && pathExt != "") {
+                            if let size = resourceValues.fileSize, size <= 2_000_000,
+                               let contents = try? String(contentsOf: fileURL, encoding: .utf8) {
+                                var fileMatchCount = 0
+                                for (lineIndex, line) in contents.components(separatedBy: "\n").enumerated() {
+                                    if line.localizedCaseInsensitiveContains(needle) {
+                                        let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                                        let snippet = trimmedLine.count > 120 ? String(trimmedLine.prefix(120)) + "…" : trimmedLine
+                                        results.append("[Content match] \(relativePath):\(lineIndex + 1): \(snippet)")
+                                        fileMatchCount += 1
+                                        if fileMatchCount >= 5 || results.count >= maxResults { break }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-            return matches.isEmpty ? "No matches for '\(query)' in the authorized search locations." : matches.joined(separator: "\n")
+            return results
         }.value
 
-        return .success(resultText, data: ["query": query])
+        let extInfo = (extFilter?.isEmpty == false) ? " [extension: .\(extFilter!)]" : ""
+        let searchDirDisplay = pathArg == "." ? "workspace" : "'\(pathArg)'"
+
+        if matches.isEmpty {
+            let message = "No matches for '\(query)' found in \(searchDirDisplay) (searchType: \(searchType)\(extInfo))."
+            return .success(message, data: [
+                "query": query,
+                "count": "0",
+                "searchType": searchType,
+                "path": pathArg
+            ])
+        }
+
+        let output = matches.joined(separator: "\n")
+        return .success(output, data: [
+            "query": query,
+            "count": "\(matches.count)",
+            "searchType": searchType,
+            "path": pathArg,
+            "matches": output
+        ])
     }
 }
 
@@ -428,7 +540,7 @@ public struct SystemAssetLookupAssistTool: AssistTool {
 private struct AssistToLegacyAdapter {
     static func makeDefinition(from tool: AssistTool) -> ToolDefinition {
         let allowed = Set(tool.parametersSchema.properties?.keys.map { String($0) } ?? [])
-        let requiresConfirmation = tool.riskLevel >= .execution || tool.id == "file_search"
+        let requiresConfirmation = tool.riskLevel >= .execution
         return ToolDefinition(
             id: tool.id,
             name: tool.name,
@@ -495,7 +607,15 @@ public final class ToolsRegistry {
         register(tool: AssistCreateDirectoryTool())
         register(tool: AssistDeleteDirectoryTool())
         register(tool: AssistChangeDirectoryTool())
+        register(tool: AssistPrintWorkingDirectoryTool())
         register(tool: AssistTreeViewTool())
+
+        // Terminal execution
+        register(tool: AssistTerminalTool())
+        register(tool: AssistTerminalTool(id: "terminal_run"))
+
+        // Project inspection & version control
+        register(tool: AssistProjectInspectTool())
 
         // Search operations
         register(tool: AssistSearchTool())

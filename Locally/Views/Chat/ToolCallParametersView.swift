@@ -10,14 +10,16 @@ public struct ToolCallParametersView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Parameters")
-                    .font(.caption)
-                    .bold()
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if !arguments.isEmpty {
+        if arguments.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Parameters")
+                        .font(.caption2)
+                        .bold()
+                        .foregroundStyle(.secondary)
+                    Spacer()
                     Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
                         copyArguments()
                     }
@@ -25,39 +27,35 @@ public struct ToolCallParametersView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 }
-            }
 
-            if arguments.isEmpty {
-                Text("No parameters required")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     ForEach(arguments.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(ToolNameFormatter.formatArgumentKey(key))
-                                .font(.caption2)
+                        HStack(alignment: .top, spacing: 6) {
+                            Text(ToolNameFormatter.formatArgumentKey(key) + ":")
+                                .font(.system(.caption2, design: .monospaced))
                                 .bold()
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
 
-                            ScrollView(.horizontal) {
-                                Text(value)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.primary)
-                                    .textSelection(.enabled)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                            }
-                            .scrollIndicators(.hidden)
-                            .background(Color.primary.opacity(0.04), in: .rect(cornerRadius: 6))
+                            Text(value)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .padding(.vertical, 2)
+                        .padding(.horizontal, 6)
+                        .background(Color.primary.opacity(0.03), in: .rect(cornerRadius: 4))
                     }
                 }
             }
+            .padding(8)
+            .background(Color.primary.opacity(0.02), in: .rect(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+            )
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.03), in: .rect(cornerRadius: 8))
     }
 
     private func copyArguments() {

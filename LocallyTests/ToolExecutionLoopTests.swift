@@ -285,6 +285,23 @@ final class ToolExecutionLoopTests: XCTestCase {
         XCTAssertFalse(prompt.contains("file_read"))
     }
 
+    func testObservationPromptAppendsIntegrityAdvisoryOnErrorsAndNotFound() {
+        let notFoundPrompt = AntigravityLoopEngine.observationPrompt(
+            toolID: "file_search",
+            output: "0 files found matching query",
+            success: true
+        )
+        XCTAssertTrue(notFoundPrompt.contains("do not assume non-existence immediately"))
+        XCTAssertTrue(notFoundPrompt.contains("Strictly DO NOT fabricate fake files"))
+
+        let successPrompt = AntigravityLoopEngine.observationPrompt(
+            toolID: "file_read",
+            output: "File contents: hello world",
+            success: true
+        )
+        XCTAssertFalse(successPrompt.contains("do not assume non-existence immediately"))
+    }
+
     // MARK: - Executor
 
     func testExecutorReturnsTheRealToolResult() async {

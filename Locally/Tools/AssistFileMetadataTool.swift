@@ -23,24 +23,30 @@ public struct AssistFileMetadataTool: AssistTool {
 
     public func execute(input: [String: Any], context: AssistContext) async throws -> AssistToolResult {
         guard let rawPath = (input["path"] as? String), !rawPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .failure("Missing required parameter: path")
+            return .failure("Missing required parameter: path", code: .missingArgument)
         }
-        guard let url = resolveWorkspacePath(rawPath, workspaceRoot: context.workspaceRoot) else {
-            return .failure("Refusing to access path outside the workspace: \(rawPath)")
+
+        let url: URL
+        do {
+            url = try context.fileSystem.resolve(rawPath)
+        } catch {
+            return .failure("Refusing to access path outside the workspace: \(rawPath)", code: .invalidInput)
         }
+
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-            return .failure("No file or directory at path: \(rawPath)")
+            return .failure("No file or directory at path: \(rawPath)", code: .notFound)
         }
 
         let attributes: [FileAttributeKey: Any]
         do {
             attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         } catch {
-            return .failure("Failed to read metadata for \(rawPath): \(error.localizedDescription)")
+            return .failure("Failed to read metadata for \(rawPath): \(error.localizedDescription)", code: .executionFailed)
         }
 
         let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        let formattedSize = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let creation = (attributes[.creationDate] as? Date).map { formatter.string(from: $0) } ?? ""
@@ -49,15 +55,20 @@ public struct AssistFileMetadataTool: AssistTool {
         let permissionsOctal = String(permissionsValue, radix: 8)
         let fileType = (attributes[.type] as? FileAttributeType)?.rawValue ?? "unknown"
         let isDirString = isDirectory.boolValue ? "true" : "false"
-        let relative = relativePath(url, workspaceRoot: context.workspaceRoot)
+
+        let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false
+        let symlinkDestination = isSymlink ? ((try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) ?? "unknown") : ""
+
+        let relative = AssistToolingSupport.relativePath(for: url, workspaceRoot: context.workspaceRoot)
 
         let output = """
         Metadata for \(relative):
         - File name: \(url.lastPathComponent)
         - Extension: \(url.pathExtension.isEmpty ? "(none)" : url.pathExtension)
         - Is directory: \(isDirString)
+        - Is symlink: \(isSymlink ? "true (\(symlinkDestination))" : "false")
         - File type: \(fileType)
-        - Size: \(size) bytes
+        - Size: \(size) bytes (\(formattedSize))
         - Created: \(creation.isEmpty ? "(unknown)" : creation)
         - Modified: \(modification.isEmpty ? "(unknown)" : modification)
         - Permissions (octal): \(permissionsOctal)
@@ -67,41 +78,15 @@ public struct AssistFileMetadataTool: AssistTool {
             "fileName": url.lastPathComponent,
             "extension": url.pathExtension,
             "isDirectory": isDirString,
+            "isSymlink": isSymlink ? "true" : "false",
+            "symlinkDestination": symlinkDestination,
             "fileType": fileType,
             "size": "\(size)",
+            "formattedSize": formattedSize,
             "creationDate": creation,
             "modificationDate": modification,
             "permissions": permissionsOctal,
             "permissionsOctal": permissionsOctal
         ])
-    }
-
-    private func resolveWorkspacePath(_ raw: String, workspaceRoot: URL) -> URL? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.contains("\0"), !trimmed.hasPrefix("~"), !trimmed.contains("..") else {
-            return nil
-        }
-        let rootPath = workspaceRoot.standardized.path
-        let candidate: URL
-        if trimmed.hasPrefix("/") {
-            candidate = URL(fileURLWithPath: trimmed).standardized
-        } else {
-            candidate = workspaceRoot.appendingPathComponent(trimmed).standardized
-        }
-        let candidatePath = candidate.path
-        guard candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/") else {
-            return nil
-        }
-        return candidate
-    }
-
-    private func relativePath(_ url: URL, workspaceRoot: URL) -> String {
-        let rootPath = workspaceRoot.standardized.path
-        let path = url.standardized.path
-        if path == rootPath { return "." }
-        if path.hasPrefix(rootPath + "/") {
-            return String(path.dropFirst(rootPath.count + 1))
-        }
-        return path
     }
 }

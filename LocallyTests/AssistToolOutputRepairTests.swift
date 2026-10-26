@@ -142,4 +142,187 @@ final class AssistToolOutputRepairTests: XCTestCase {
         XCTAssertTrue(noMatchResult.success)
         XCTAssertTrue(noMatchResult.output.contains("No matches found"))
     }
+
+    func testFileSearchToolFilenameAndContentMatches() async throws {
+        let viewsDir = tempDir.appendingPathComponent("Locally/Views", isDirectory: true)
+        try FileManager.default.createDirectory(at: viewsDir, withIntermediateDirectories: true)
+        let mainViewFile = viewsDir.appendingPathComponent("AssistMainView.swift")
+        try "struct AssistMainView: View {\n    var body: some View { Text(\"AssistMain\") }\n}".write(to: mainViewFile, atomically: true, encoding: .utf8)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = FileSearchAssistTool()
+
+        // 1. Search by filename
+        let nameResult = try await tool.execute(input: ["query": "AssistMainView", "searchType": "filename"], context: context)
+        XCTAssertTrue(nameResult.success)
+        XCTAssertTrue(nameResult.output.contains("[Filename match]"))
+        XCTAssertTrue(nameResult.output.contains("AssistMainView.swift"))
+
+        // 2. Search by content
+        let contentResult = try await tool.execute(input: ["query": "AssistMain", "searchType": "content"], context: context)
+        XCTAssertTrue(contentResult.success)
+        XCTAssertTrue(contentResult.output.contains("[Content match]"))
+        XCTAssertTrue(contentResult.output.contains("AssistMainView.swift:2:"))
+
+        // 3. Search both
+        let bothResult = try await tool.execute(input: ["query": "AssistMainView"], context: context)
+        XCTAssertTrue(bothResult.success)
+        XCTAssertTrue(bothResult.output.contains("AssistMainView.swift"))
+    }
+
+    func testFileSearchToolDirectoryPruningAndIncludeIgnored() async throws {
+        // Create files in build and .git directories
+        let buildDir = tempDir.appendingPathComponent("build/DerivedData", isDirectory: true)
+        try FileManager.default.createDirectory(at: buildDir, withIntermediateDirectories: true)
+        let buildArtifact = buildDir.appendingPathComponent("Artifact.swift")
+        try "let buildArtifactSecret = 123".write(to: buildArtifact, atomically: true, encoding: .utf8)
+
+        let gitDir = tempDir.appendingPathComponent(".git/objects", isDirectory: true)
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        let gitObj = gitDir.appendingPathComponent("GitSecret.swift")
+        try "let gitSecret = 456".write(to: gitObj, atomically: true, encoding: .utf8)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = FileSearchAssistTool()
+
+        // Default search should skip build & .git
+        let defaultResult = try await tool.execute(input: ["query": "buildArtifactSecret"], context: context)
+        XCTAssertTrue(defaultResult.success)
+        XCTAssertTrue(defaultResult.output.contains("No matches for 'buildArtifactSecret'"))
+
+        // When includeIgnored: true, it should find it
+        let ignoredResult = try await tool.execute(input: ["query": "buildArtifactSecret", "includeIgnored": true], context: context)
+        XCTAssertTrue(ignoredResult.success)
+        XCTAssertTrue(ignoredResult.output.contains("Artifact.swift"))
+    }
+
+    func testReadFileToolNonExistentFileReturnsNotFound() async throws {
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = AssistReadFileTool()
+        let result = try await tool.execute(input: ["path": "does_not_exist.swift"], context: context)
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(result.toolErrorCode, .notFound)
+        XCTAssertTrue(result.output.contains("File does not exist"))
+    }
+
+    func testReadFileToolDirectoryReturnsInvalidInput() async throws {
+        let dir = tempDir.appendingPathComponent("subfolder", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = AssistReadFileTool()
+        let result = try await tool.execute(input: ["path": "subfolder"], context: context)
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(result.toolErrorCode, .invalidInput)
+        XCTAssertTrue(result.output.contains("is a directory, not a file"))
+    }
+
+    func testReadFileToolEmptyFile() async throws {
+        let emptyFile = tempDir.appendingPathComponent("empty.txt")
+        try "".write(to: emptyFile, atomically: true, encoding: .utf8)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = AssistReadFileTool()
+        let result = try await tool.execute(input: ["path": "empty.txt"], context: context)
+        XCTAssertTrue(result.success)
+        XCTAssertTrue(result.output.contains("File is empty: empty.txt"))
+        XCTAssertEqual(result.data?["totalLines"], "0")
+    }
+
+    func testReadFileToolLineRangesAndClamping() async throws {
+        let file = tempDir.appendingPathComponent("lines.txt")
+        try "Line1\nLine2\nLine3\nLine4\nLine5".write(to: file, atomically: true, encoding: .utf8)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = AssistReadFileTool()
+
+        // Sliced lines 2 to 4
+        let rangeResult = try await tool.execute(input: ["path": "lines.txt", "lines": ["start": 2, "end": 4]], context: context)
+        XCTAssertTrue(rangeResult.success)
+        XCTAssertTrue(rangeResult.output.contains("lines 2-4 of 5"))
+        XCTAssertTrue(rangeResult.output.contains("2: Line2"))
+        XCTAssertTrue(rangeResult.output.contains("3: Line3"))
+        XCTAssertTrue(rangeResult.output.contains("4: Line4"))
+        XCTAssertFalse(rangeResult.output.contains("1: Line1"))
+        XCTAssertFalse(rangeResult.output.contains("5: Line5"))
+
+        // Out of range start
+        let invalidStartResult = try await tool.execute(input: ["path": "lines.txt", "lines": ["start": 10, "end": 12]], context: context)
+        XCTAssertFalse(invalidStartResult.success)
+        XCTAssertEqual(invalidStartResult.toolErrorCode, .invalidInput)
+    }
+
+    func testReadFileToolBinaryFileDetected() async throws {
+        let binFile = tempDir.appendingPathComponent("image.png")
+        let binaryBytes: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        try Data(binaryBytes).write(to: binFile)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = AssistReadFileTool()
+        let result = try await tool.execute(input: ["path": "image.png"], context: context)
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(result.toolErrorCode, .invalidInput)
+        XCTAssertTrue(result.output.contains("binary or unsupported file"))
+    }
+
+    func testTreeViewToolPrunesSkippedDirectoriesByDefault() async throws {
+        let buildDir = tempDir.appendingPathComponent("build/SubDir", isDirectory: true)
+        try FileManager.default.createDirectory(at: buildDir, withIntermediateDirectories: true)
+        let srcDir = tempDir.appendingPathComponent("Sources/App", isDirectory: true)
+        try FileManager.default.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try "print()".write(to: srcDir.appendingPathComponent("App.swift"), atomically: true, encoding: .utf8)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = AssistTreeViewTool()
+        let result = try await tool.execute(input: ["path": "."], context: context)
+
+        XCTAssertTrue(result.success)
+        XCTAssertTrue(result.output.contains("Sources"))
+        XCTAssertTrue(result.output.contains("App.swift"))
+        XCTAssertFalse(result.output.contains("SubDir"))
+    }
+
+    func testReadDirectoryToolShowsCountsAndSizes() async throws {
+        let dir = tempDir.appendingPathComponent("details", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "hello".write(to: dir.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let sub = dir.appendingPathComponent("nested_folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = AssistReadDirectoryTool()
+        let result = try await tool.execute(input: ["path": "details"], context: context)
+
+        XCTAssertTrue(result.success)
+        XCTAssertTrue(result.output.contains("Directory details (2 entries):"))
+        XCTAssertTrue(result.output.contains("a.txt"))
+        XCTAssertTrue(result.output.contains("nested_folder/"))
+        XCTAssertTrue(result.output.contains("1 files, 1 directories"))
+    }
+
+    func testFileMetadataToolAttributes() async throws {
+        let file = tempDir.appendingPathComponent("meta.swift")
+        try "import Foundation".write(to: file, atomically: true, encoding: .utf8)
+
+        let context = AssistContext(workspaceRoot: tempDir)
+        let tool = AssistFileMetadataTool()
+        let result = try await tool.execute(input: ["path": "meta.swift"], context: context)
+
+        XCTAssertTrue(result.success)
+        XCTAssertTrue(result.output.contains("Metadata for meta.swift:"))
+        XCTAssertTrue(result.output.contains("Extension: swift"))
+        XCTAssertTrue(result.output.contains("Is directory: false"))
+        XCTAssertEqual(result.data?["isDirectory"], "false")
+    }
+
+    func testAssistWorkspaceScanPruning() {
+        XCTAssertTrue(AssistWorkspaceScan.skippedDirs.contains(".git"))
+        XCTAssertTrue(AssistWorkspaceScan.skippedDirs.contains(".build"))
+        XCTAssertTrue(AssistWorkspaceScan.skippedDirs.contains("build"))
+        XCTAssertTrue(AssistWorkspaceScan.skippedDirs.contains("DerivedData"))
+        XCTAssertTrue(AssistWorkspaceScan.skippedDirs.contains("Pods"))
+        XCTAssertTrue(AssistWorkspaceScan.skippedDirs.contains("node_modules"))
+        XCTAssertTrue(AssistWorkspaceScan.skippedDirs.contains(".venv"))
+        XCTAssertTrue(AssistWorkspaceScan.skippedDirs.contains("xcuserdata"))
+    }
 }

@@ -16,7 +16,9 @@ public struct AssistTreeViewTool: AssistTool {
             description: "Generates a tree-like representation of the project structure. Symlinks are listed as leaves, never followed (prevents symlink-cycle recursion). Output is capped; a truncation marker is appended when the cap is hit.",
             properties: [
                 "path": JSONSchema(type: "string", description: "Workspace-relative path to render. Default: \".\" (workspace root)."),
-                "maxDepth": JSONSchema(type: "integer", description: "Maximum tree depth. Clamped to 1...10. Default: 3.")
+                "maxDepth": JSONSchema(type: "integer", description: "Maximum tree depth. Clamped to 1...10. Default: 3."),
+                "showHidden": JSONSchema(type: "boolean", description: "Whether to include hidden files and directories (default: false)."),
+                "includeIgnored": JSONSchema(type: "boolean", description: "Whether to include build/cache directories such as .git, build, DerivedData (default: false).")
             ],
             required: []
         )
@@ -30,18 +32,38 @@ public struct AssistTreeViewTool: AssistTool {
             }
             maxDepth = min(max(parsed, 1), 10)
         }
+        let showHidden = (input["showHidden"] as? Bool) ?? false
+        let includeIgnored = (input["includeIgnored"] as? Bool) ?? false
+
         let path = (input["path"] as? String) ?? "."
         let rootURL: URL
         do {
             rootURL = try context.fileSystem.resolve(path)
         } catch {
-            return .failure("Failed to render tree at \(path): \(error.localizedDescription)", code: .notFound)
+            return .failure("Directory not found at path: \(path) (\(error.localizedDescription))", code: .notFound)
+        }
+
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: rootURL.path, isDirectory: &isDir) else {
+            return .failure("Directory not found at path: \(path)", code: .notFound)
+        }
+        guard isDir.boolValue else {
+            return .failure("Path '\(path)' is a file, not a directory. Use 'file_read' to view file contents.", code: .invalidInput)
         }
 
         var visited = Set<String>()
         var entryCount = 0
         var truncated = false
-        let tree = generateTree(at: rootURL, depth: 0, maxDepth: maxDepth, visited: &visited, entryCount: &entryCount, truncated: &truncated)
+        let tree = generateTree(
+            at: rootURL,
+            depth: 0,
+            maxDepth: maxDepth,
+            showHidden: showHidden,
+            includeIgnored: includeIgnored,
+            visited: &visited,
+            entryCount: &entryCount,
+            truncated: &truncated
+        )
         let suffix = truncated ? "\n… [truncated at 2000 entries]" : ""
         let output = """
         Project Tree for \(rootURL.lastPathComponent):
@@ -55,7 +77,16 @@ public struct AssistTreeViewTool: AssistTool {
         ])
     }
 
-    private func generateTree(at url: URL, depth: Int, maxDepth: Int, visited: inout Set<String>, entryCount: inout Int, truncated: inout Bool) -> String {
+    private func generateTree(
+        at url: URL,
+        depth: Int,
+        maxDepth: Int,
+        showHidden: Bool,
+        includeIgnored: Bool,
+        visited: inout Set<String>,
+        entryCount: inout Int,
+        truncated: inout Bool
+    ) -> String {
         if depth > maxDepth { return "" }
         if truncated { return "" }
 
@@ -71,19 +102,39 @@ public struct AssistTreeViewTool: AssistTool {
         visited.insert(canonical)
 
         do {
-            let contents = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isSymbolicLinkKey], options: []).sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            let options: FileManager.DirectoryEnumerationOptions = showHidden ? [] : [.skipsHiddenFiles]
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey],
+                options: options
+            ).sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+
             for item in contents {
                 if entryCount >= 2000 { truncated = true; break }
+                let name = item.lastPathComponent
+                if !showHidden && name.hasPrefix(".") { continue }
+                if !includeIgnored && AssistWorkspaceScan.skippedDirs.contains(name) { continue }
+
                 entryCount += 1
-                let isSymlink = (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false
-                var isDir: ObjCBool = false
-                let exists = FileManager.default.fileExists(atPath: item.path, isDirectory: &isDir)
+                let resourceValues = try? item.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+                let isSymlink = resourceValues?.isSymbolicLink ?? false
+                let isDir = resourceValues?.isDirectory ?? false
+
                 if isSymlink {
-                    result += "\(indent)  🔗 \(item.lastPathComponent)\n"
-                } else if exists && isDir.boolValue {
-                    result += generateTree(at: item, depth: depth + 1, maxDepth: maxDepth, visited: &visited, entryCount: &entryCount, truncated: &truncated)
+                    result += "\(indent)  🔗 \(name)\n"
+                } else if isDir {
+                    result += generateTree(
+                        at: item,
+                        depth: depth + 1,
+                        maxDepth: maxDepth,
+                        showHidden: showHidden,
+                        includeIgnored: includeIgnored,
+                        visited: &visited,
+                        entryCount: &entryCount,
+                        truncated: &truncated
+                    )
                 } else {
-                    result += "\(indent)  📄 \(item.lastPathComponent)\n"
+                    result += "\(indent)  📄 \(name)\n"
                 }
             }
         } catch {

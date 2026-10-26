@@ -3,7 +3,7 @@ import Foundation
 public struct AssistReadDirectoryTool: AssistTool {
     public let id = "dir_read"
     public let name = "Read Directory"
-    public let description = "Lists the contents of a directory (native ls equivalent). Returns sorted entries with directory markers, entry count, and the resolved path. Non-recursive — use tree_view for a recursive listing."
+    public let description = "Lists the contents of a directory (native ls equivalent). Returns sorted entries with directory markers, file/directory counts, and total size. Non-recursive — use tree_view for a recursive listing."
 
     public init() {}
 
@@ -13,47 +13,96 @@ public struct AssistReadDirectoryTool: AssistTool {
     public var parametersSchema: JSONSchema {
         JSONSchema(
             type: "object",
-            description: "Lists the contents of a directory. Returns sorted entries; directory entries are suffixed with '/'.",
+            description: "Lists the contents of a directory. Returns sorted entries; directory entries are suffixed with '/', symlinks with '@'.",
             properties: [
-                "path": JSONSchema(type: "string", description: "Workspace-relative path of the directory to list. Use \".\" for the session working directory.")
+                "path": JSONSchema(type: "string", description: "Workspace-relative path of the directory to list. Use \".\" for the session working directory."),
+                "showHidden": JSONSchema(type: "boolean", description: "Whether to include hidden files and directories (default: false).")
             ],
             required: ["path"]
         )
     }
 
     public func execute(input: [String: Any], context: AssistContext) async throws -> AssistToolResult {
-        guard let path = input["path"] as? String else {
+        guard let path = (input["path"] ?? input["directory"] ?? input["dir"]) as? String else {
             return .failure("Missing required parameter: path", code: .missingArgument)
         }
 
+        let showHidden = (input["showHidden"] as? Bool) ?? false
+
+        let resolvedURL: URL
         do {
-            let contents = try context.fileSystem.listDirectory(at: path).sorted()
-            let resolvedPath = (try? context.fileSystem.resolve(path).path) ?? path
-            // Annotate directories with a trailing "/" so the model can tell
-            // files from directories without a second tool call.
+            resolvedURL = try context.fileSystem.resolve(path)
+        } catch {
+            return .failure("Directory not found at path: '\(path)' (\(error.localizedDescription))", code: .notFound)
+        }
+
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: resolvedURL.path, isDirectory: &isDir) else {
+            return .failure("Directory not found at path: '\(path)'", code: .notFound)
+        }
+        guard isDir.boolValue else {
+            return .failure("Path '\(path)' is a file, not a directory. Use 'file_read' to view file contents.", code: .invalidInput)
+        }
+
+        do {
+            let options: FileManager.DirectoryEnumerationOptions = showHidden ? [] : [.skipsHiddenFiles]
+            let contents = try fm.contentsOfDirectory(
+                at: resolvedURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey],
+                options: options
+            ).sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+
             var annotated: [String] = []
-            for entry in contents {
-                let child = path == "." || path.isEmpty ? entry : (path as NSString).appendingPathComponent(entry)
-                var isDir: ObjCBool = false
-                let existsAsDir: Bool
-                if let childURL = try? context.fileSystem.resolve(child) {
-                    existsAsDir = FileManager.default.fileExists(atPath: childURL.path, isDirectory: &isDir) && isDir.boolValue
+            var fileCount = 0
+            var dirCount = 0
+            var symlinkCount = 0
+            var totalBytes: Int64 = 0
+
+            for item in contents {
+                let name = item.lastPathComponent
+                if !showHidden && name.hasPrefix(".") { continue }
+
+                let values = try? item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
+                let isSymlink = values?.isSymbolicLink ?? false
+                let isItemDir = values?.isDirectory ?? false
+                let size = Int64(values?.fileSize ?? 0)
+
+                if isSymlink {
+                    symlinkCount += 1
+                    let dest = (try? fm.destinationOfSymbolicLink(atPath: item.path)) ?? "unknown"
+                    annotated.append("\(name)@ -> \(dest)")
+                } else if isItemDir {
+                    dirCount += 1
+                    annotated.append("\(name)/")
                 } else {
-                    existsAsDir = false
+                    fileCount += 1
+                    totalBytes += size
+                    annotated.append(name)
                 }
-                annotated.append(existsAsDir ? entry + "/" : entry)
             }
+
             let listing = annotated.isEmpty ? "(directory is empty)" : annotated.joined(separator: "\n")
+            let formattedSize = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+            let summary = "Summary: \(fileCount) files, \(dirCount) directories, \(symlinkCount) symlinks (\(formattedSize))"
             let output = """
-            Directory \(path) (\(contents.count) entries):
+            Directory \(path) (\(annotated.count) entries):
             \(listing)
+
+            \(summary)
             """
+
             return .success(
                 output,
                 data: [
                     "contents": annotated.joined(separator: "\n"),
-                    "count": "\(contents.count)",
-                    "path": resolvedPath
+                    "count": "\(annotated.count)",
+                    "fileCount": "\(fileCount)",
+                    "dirCount": "\(dirCount)",
+                    "symlinkCount": "\(symlinkCount)",
+                    "totalBytes": "\(totalBytes)",
+                    "formattedTotalSize": formattedSize,
+                    "path": resolvedURL.path
                 ]
             )
         } catch {

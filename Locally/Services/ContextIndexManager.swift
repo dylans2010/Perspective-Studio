@@ -62,6 +62,12 @@ public enum ContextIndexManager {
         }
     }
 
+    /// Operating mode for context indexing and retrieval.
+    /// - `.chat`: Conversational and direct queries. Tool schemas and project memory are strictly excluded.
+    /// - `.agent`: Autonomous problem-solving mode. Pre-indexes core tools (`file_read`, `file_search`,
+    ///   `dir_read`, `search_text`, `tree_view`, `file_create`, `use_terminal`, `project_inspect`, `dir_pwd`,
+    ///   plus `project_memory` when a project is active), indexes on-demand system assets and skills,
+    ///   and enables dynamic retrieval.
     public enum Mode: Sendable, Equatable {
         case chat
         case agent
@@ -144,9 +150,9 @@ public enum ContextIndexManager {
     /// Total estimated tokens a Chat-mode retrieved bundle may occupy.
     public static let chatBundleTokenBudget = 600
     /// Total estimated tokens an Agent-mode retrieved bundle may occupy.
-    public static let agentBundleTokenBudget = 1_600
+    public static let agentBundleTokenBudget = 2_000
     /// Sub-cap: tool schemas inside an Agent bundle.
-    public static let toolSchemaTokenBudget = 900
+    public static let toolSchemaTokenBudget = 1_400
     /// Sub-cap: system-asset summaries (bodies are never pre-injected).
     public static let systemAssetSummaryTokenBudget = 150
     /// Sub-cap: skill excerpts.
@@ -156,7 +162,7 @@ public enum ContextIndexManager {
     /// Sub-cap: project-memory entries (Agent mode only).
     public static let projectMemoryTokenBudget = 300
     /// At most this many tool schemas in one Agent bundle.
-    public static let maxToolSchemasInBundle = 12
+    public static let maxToolSchemasInBundle = 16
     /// At most this many project-memory entries in one Agent bundle.
     public static let maxProjectMemoryEntriesInBundle = 5
     /// A skill's payload is truncated to this many characters per excerpt.
@@ -166,12 +172,21 @@ public enum ContextIndexManager {
     /// Tool ids that are always in the Agent tool bundle when present.
     public static let coreToolIDs: Set<String> = [
         "context_index_search", "system_asset_lookup", "file_read", "file_search",
-        "dir_read", "search_text", "tree_view", "file_create"
+        "dir_read", "search_text", "tree_view", "file_create",
+        "use_terminal", "project_inspect", "dir_pwd"
     ]
 
     public static let inspectionFileToolIDs: Set<String> = [
-        "file_read", "file_search", "dir_read",
-        "tool:file_read", "tool:file_search", "tool:dir_read"
+        "file_read", "file_search", "dir_read", "tree_view", "project_inspect", "dir_pwd",
+        "tool:file_read", "tool:file_search", "tool:dir_read", "tool:tree_view", "tool:project_inspect", "tool:dir_pwd"
+    ]
+
+    public static let terminalToolIDs: Set<String> = [
+        "use_terminal", "tool:use_terminal"
+    ]
+
+    public static let terminalVerbs: Set<String> = [
+        "terminal", "command", "shell", "bash", "zsh", "run", "exec", "execute", "build", "compile", "git"
     ]
 
     public static let inspectionVerbs: Set<String> = [
@@ -288,6 +303,7 @@ public enum ContextIndexManager {
         var payloadHits = 0
         var strongHit = false
         let isFileTool = entry.kind == .tool && inspectionFileToolIDs.contains(entry.id)
+        let isTerminalTool = entry.kind == .tool && terminalToolIDs.contains(entry.id)
         for token in queryTokens {
             if prepared.title.contains(token) { lexical += 10; strongHit = true }
             if prepared.keywords.contains(token) { lexical += 6; strongHit = true }
@@ -296,6 +312,12 @@ public enum ContextIndexManager {
             if isFileTool {
                 if inspectionVerbs.contains(token) || matchesFilenameExtension(token) {
                     lexical += 6
+                    strongHit = true
+                }
+            }
+            if isTerminalTool {
+                if terminalVerbs.contains(token) {
+                    lexical += 8
                     strongHit = true
                 }
             }

@@ -717,7 +717,23 @@ public final class AntigravityAgentHarness {
                     ))
                 }
 
-                return (result.success, result.output)
+                // Check for truncation metadata so the model understands bounds.
+                var deliveryOutput = result.output
+                if let data = result.data {
+                    if data["truncated"] == "true" || data[AssistToolDataKey.truncated] == "true" {
+                        if !deliveryOutput.contains("[Output truncated") && !deliveryOutput.contains("[NOTICE: Output was truncated") {
+                            let total = data["totalLines"] ?? data[AssistToolDataKey.totalLines]
+                            let totalNote = total != nil ? " (total lines: \(total!))" : ""
+                            deliveryOutput += "\n\n[NOTICE: Output was truncated to fit bounds\(totalNote). Use line ranges or narrower filters to view specific sections.]"
+                        }
+                    } else if data["fullyAvailable"] == "false", let total = data["totalLines"], let start = data["start"], let end = data["end"] {
+                        if !deliveryOutput.contains("lines \(start)-\(end) of \(total)") {
+                            deliveryOutput += "\n\n[NOTICE: Partial file slice returned: lines \(start)-\(end) of \(total). Use lines {start, end} to read other ranges.]"
+                        }
+                    }
+                }
+
+                return (result.success, deliveryOutput)
             }
 
             switch AntigravityLoopEngine.decide(turnText: turnSplit.answer, catalog: catalog) {
@@ -782,93 +798,6 @@ public final class AntigravityAgentHarness {
                     break loop
                 }
                 self.activeToolName = nil
-
-            case .callTools(let calls):
-                if isRunCancelled(thisRunID) {
-                    dispatchStatus(.idle)
-                    return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
-                }
-                if runExpired() {
-                    loopStoppedReason = runTimeoutReason()
-                    break loop
-                }
-                for (toolId, codableArgs) in calls {
-                    guard toolCallsExecuted < executionBudget else {
-                        loopStoppedReason = "I stopped this run at the tool limit (\(executionBudget) actions). The steps from this run show what was executed; anything after the limit did not run."
-                        break loop
-                    }
-                    guard let tool = ToolsRegistry.shared.tool(for: toolId) else {
-                        rejectedToolCalls += 1
-                        conversationTurns.append(Turn(role: "user", content: AntigravityLoopEngine.correctionPrompt(rejection: .unknownTool(toolId))))
-                        continue
-                    }
-                    let validated = ValidatedToolCall(toolID: toolId, toolName: ToolNameFormatter.format(toolId), arguments: codableArgs)
-                    executedSignatures.append(validated.signature)
-                    toolCallsExecuted += 1
-                    narrationTurns = 0
-
-                    let args = codableArgs
-                    let preview = sanitizedArgumentPreview(args)
-                    var record = ToolCallRecord(toolID: toolId, arguments: preview, status: .running, startedAt: .now)
-                    toolCallRecords.append(record)
-                    onEvent?(.toolCallRecordUpdated(record))
-
-                    self.activeToolName = toolId
-                    dispatchStatus(.callingTool(name: toolId))
-                    onEvent?(.toolCallDetected(tool: toolId, arguments: args.mapValues(\.anyValue)))
-                    onEvent?(.toolExecutionStarted(tool: toolId))
-
-                    let callStep = AgentStep(
-                        kind: .toolCall,
-                        title: ToolNameFormatter.format(toolId),
-                        detail: formatArgumentsPreview(args.mapValues(\.anyValue)),
-                        rawPayload: turnResponse,
-                        toolName: toolId,
-                        toolArguments: args.mapValues(\.anyValue),
-                        callID: record.id.uuidString
-                    )
-                    addStep(callStep)
-
-                    let execution = await ToolExecutor.execute(tool: tool, arguments: args, context: assistContext, timeout: toolTimeout)
-                    let result = execution.result
-                    record.status = result.success ? .completed : .failed(result.error ?? "Execution failed")
-                    record.result = result.output
-                    record.duration = execution.duration
-                    record.completedAt = .now
-                    if let index = toolCallRecords.firstIndex(where: { $0.id == record.id }) {
-                        toolCallRecords[index] = record
-                    }
-                    onEvent?(.toolCallRecordUpdated(record))
-                    dispatchStatus(.toolCompleted(name: toolId))
-                    onEvent?(.toolExecutionFinished(tool: toolId, result: result))
-
-                    if !result.success {
-                        addStep(AgentStep(
-                            kind: .error,
-                            title: "\(ToolNameFormatter.format(toolId)) Failed",
-                            detail: result.error ?? result.output,
-                            toolName: toolId,
-                            toolResult: result,
-                            callID: record.id.uuidString
-                        ))
-                    } else {
-                        addStep(AgentStep(
-                            kind: .toolResult,
-                            title: ToolNameFormatter.completedTitle(for: toolId),
-                            detail: result.output,
-                            toolName: toolId,
-                            toolResult: result,
-                            callID: record.id.uuidString
-                        ))
-                    }
-
-                    conversationTurns.append(Turn(role: "assistant", content: "I completed a step using a tool."))
-                    conversationTurns.append(Turn(
-                        role: "user",
-                        content: AntigravityLoopEngine.observationPrompt(toolID: toolId, output: result.output, success: result.success)
-                    ))
-                    self.activeToolName = nil
-                }
 
             case .invalidToolCall(_, let rejection):
                 // Nothing was executed. The turn's text (the model's own
@@ -1081,8 +1010,16 @@ public final class AntigravityAgentHarness {
         ## Workspace — where file actions happen:
         - This run's workspace folder is: \(workspaceRoot.path)
         - Relative paths in tool arguments resolve inside that folder. "This directory", "the current directory", and "here" in the user's request mean exactly that folder — nowhere else.
-        - To create a file the user named with a plain filename (for example `main.swift`) in "this directory", call the file-creation tool `file_create` (exact id, used in the TOOL_CALL line) with that filename as its `path` argument and the file's full content. Do not invent a different folder, and do not describe a shell or debugger command instead — no such capability exists here.
+        - Terminal Execution: When shell commands are needed (`git`, `swift`, builds, `grep`, `find`, project tasks), invoke `use_terminal` via a TOOL_CALL with the specific command. Never write shell commands in prose expecting them to run automatically.
+        - To create a file named with a plain filename (for example `main.swift`) in "this directory", call the file-creation tool `file_create` with that filename as its `path` argument and the file's full content. Do not invent a different folder.
         - When you create or change files, say in your final answer which folder they are in, in plain language.
+
+        ## Real-File & Real-Result Integrity Mandate:
+        - NEVER create mock files, placeholder files, or dummy implementations because a requested file was not found. If an item does not exist, report that reality truthfully.
+        - NEVER invent file contents, terminal output, build logs, or test results. Everything you report must be grounded in real observations from executed tools.
+        - Read-only requests ("Read this file", "Inspect this view", "Explain how this project works", "Find the implementation") must remain strictly read-only. NEVER create, modify, rename, or delete files on a read-only request.
+        - Missing-file protocol: If a target file is not found initially, verify the workspace root, broaden searches with `file_search`, inspect directories with `dir_read` or `tree_view`, and use `project_inspect`. Report actual search results honestly.
+        - Inspect before editing: Always read an existing file before modifying it, make the smallest coherent changes, and verify changes on disk.
 
         ## Core Operational Guidelines:
         1. When a task requires external data, system verification, or computation, use the available tools.
@@ -1094,7 +1031,7 @@ public final class AntigravityAgentHarness {
         5. When you have gathered enough information or the task is finished, respond directly to the user (no tool call syntax), with a response proportionate to the task — a short task gets a short answer.
 
         ## What Can Actually Run
-        - Only the tools in this run's tool set execute. There is no shell, terminal, debugger, or arbitrary-command capability unless a tool for it appears in that set; writing a command (or a name like a debugger) in prose or a code block does not run it.
+        - Only the tools in this run's tool set execute. Terminal commands execute only when `use_terminal` is invoked via TOOL_CALL; writing a command in prose or a code block does not run it.
         - An action happens only when you emit a tool call through the channel above. Describing, promising, or showing an action is not performing it.
         - Never claim to have opened something, run something, changed a file, or inspected a process unless a tool result from this run shows it. If the capability the task needs is missing here, say so plainly and stop.
 

@@ -116,6 +116,25 @@ public enum AntigravityLoopEngine {
         decide(turnText: turnText, catalog: ToolCatalog(permissiveIDs: knownToolIDs))
     }
 
+    /// Evaluates whether a tool result represents an error, failure, or empty/not-found outcome.
+    public nonisolated static func isFailureOrEmptyResult(output: String, success: Bool) -> Bool {
+        if !success { return true }
+        let lower = output.lowercased()
+        let signals = [
+            "not found", "no match", "no files", "0 files", "does not exist",
+            "no results", "failed", "error:", "cannot find", "could not find",
+            "file is empty", "empty directory", "no such file"
+        ]
+        return signals.contains { lower.contains($0) }
+    }
+
+    /// Recovery guidance appended when a tool returned an error or no matches,
+    /// steering models away from assuming non-existence or hallucinating fake files.
+    public nonisolated static func recoveryGuidance(output: String, success: Bool) -> String {
+        guard isFailureOrEmptyResult(output: output, success: success) else { return "" }
+        return "\n\nNote: If a target was not found or failed, do not assume non-existence immediately if broader searches (e.g. file_search, tree_view) or directory inspection (dir_read) haven't been tried. Strictly DO NOT fabricate fake files, dummy implementations, or imaginary outputs. If unlocatable after thorough search, state the actual finding honestly."
+    }
+
     /// The user-turn text that feeds one tool result back into the loop.
     /// It names the action in human terms only — never the raw tool id —
     /// so even the model's context stops reinforcing id-naming.
@@ -123,9 +142,10 @@ public enum AntigravityLoopEngine {
         let statusLine = success
             ? ""
             : "This action FAILED — it is an error result, not an observation. Do not describe it as done; report the failure in plain language and choose a different next step.\n"
+        let recovery = recoveryGuidance(output: output, success: success)
         return """
         Tool result (from \(ToolNameFormatter.format(toolID))):
-        \(statusLine)\(output)
+        \(statusLine)\(output)\(recovery)
 
         Analyze this result and proceed to the next step, or provide the final answer if the task is complete. Remember: never mention tool names, ids, or invocation syntax in your answer — describe actions and findings in plain language.
         """
@@ -138,9 +158,10 @@ public enum AntigravityLoopEngine {
             let statusLine = r.success
                 ? ""
                 : "This action FAILED — it is an error result, not an observation. Do not describe it as done; report the failure in plain language and choose a different next step.\n"
+            let recovery = recoveryGuidance(output: r.output, success: r.success)
             blocks.append("""
             Tool result (from \(ToolNameFormatter.format(r.toolID))):
-            \(statusLine)\(r.output)
+            \(statusLine)\(r.output)\(recovery)
             """)
         }
         let joined = blocks.joined(separator: "\n\n")

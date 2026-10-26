@@ -40,7 +40,7 @@ public struct AssistChangeDirectoryTool: AssistTool {
             let target = try context.fileSystem.setCurrentDirectory(path)
             // Persist for subsequent messages in this session; the context
             // builder re-applies it when the context is rebuilt.
-            AssistWorkingDirectoryStore.shared.setCurrentDirectory(target, for: context.sessionId)
+            AssistWorkingDirectoryStore.shared.setCurrentDirectory(target, forSession: context.sessionId, agentProjectId: context.agentProjectID)
             // Listing for orientation, like a shell that prints the new cwd.
             let contents = (try? context.fileSystem.listDirectory(at: "."))?.sorted() ?? []
             return .success("Working directory changed to \(target.path)", data: [

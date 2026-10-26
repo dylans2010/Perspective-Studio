@@ -57,6 +57,55 @@ public enum ToolNameFormatter {
         "audit_access_levels": "Audited Access Levels"
     ]
 
+    /// Explicit overrides for concise active activity labels.
+    private nonisolated static let explicitActivityLabels: [String: String] = [
+        "file_search": "Searching files",
+        "search_file": "Searching files",
+        "file_read": "Reading source",
+        "read_file": "Reading source",
+        "file_write": "Writing file",
+        "write_file": "Writing file",
+        "file_create": "Writing file",
+        "create_file": "Writing file",
+        "file_append": "Appending to file",
+        "append_file": "Appending to file",
+        "replace_in_file": "Editing file",
+        "replace_file_content": "Editing file",
+        "search_text": "Searching text",
+        "text_search": "Searching text",
+        "regex_search": "Searching text",
+        "search_symbol": "Searching symbols",
+        "symbol_search": "Searching symbols",
+        "tree_view": "Exploring project structure",
+        "dir_read": "Listing directory",
+        "read_dir": "Listing directory",
+        "dir_cd": "Changing directory",
+        "cd": "Changing directory",
+        "dir_pwd": "Checking directory",
+        "pwd": "Checking directory",
+        "use_terminal": "Running command",
+        "terminal_run": "Running command",
+        "terminal": "Running command",
+        "project_inspect": "Inspecting project",
+        "calculator": "Calculating",
+        "calc": "Calculating",
+        "context_index_search": "Searching index",
+        "project_memory": "Checking project memory",
+        "hardware_info": "Checking hardware info",
+        "mac_hardware_info": "Checking hardware info",
+        "date_time": "Checking date & time",
+        "datetime": "Checking date & time",
+        "date": "Checking date & time",
+        "time": "Checking current time",
+        "system_asset_lookup": "Looking up system asset",
+        "model_library": "Checking model library",
+        "plan_ask_user": "Asking user",
+        "execution_plan": "Managing execution plan",
+        "todo_scan": "Scanning TODOs",
+        "dead_code_scan": "Scanning dead code",
+        "code_metrics": "Analyzing code metrics"
+    ]
+
     /// Dictionary mapping base verb lemmas to their present participle (-ing) form.
     private nonisolated static let verbParticiples: [String: String] = [
         "create": "Creating",
@@ -249,9 +298,57 @@ public enum ToolNameFormatter {
         return "Used \(title)"
     }
 
+    /// Returns a concise active activity label for tool invocation (e.g. "file_read" -> "Reading source").
+    public nonisolated static func activityLabel(for toolID: String) -> String {
+        let trimmed = toolID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Running Tool" }
+
+        let normalized = trimmed.lowercased().replacingOccurrences(of: "-", with: "_")
+        if let label = explicitActivityLabels[normalized] {
+            return label
+        }
+
+        // Also check with common prefixes stripped
+        for prefix in ["tool_", "assist_tool_", "fn_", "agent_"] {
+            if normalized.hasPrefix(prefix) {
+                let stripped = String(normalized.dropFirst(prefix.count))
+                if let label = explicitActivityLabels[stripped] {
+                    return label
+                }
+            }
+        }
+
+        return format(toolID)
+    }
+
     /// Returns an appropriate SF Symbol icon name for the given tool.
     public nonisolated static func iconName(for rawName: String) -> String {
         let normalized = rawName.lowercased().replacingOccurrences(of: "-", with: "_")
+
+        if normalized == "project_inspect" || normalized.contains("project_inspect") {
+            return "hammer"
+        }
+        if normalized == "project_memory" || normalized.contains("project_memory") {
+            return "brain.head.profile"
+        }
+        if normalized.contains("context_index") {
+            return "sparkle.magnifyingglass"
+        }
+        if normalized == "use_terminal" || normalized == "terminal_run" || normalized == "terminal" || normalized.contains("terminal") || normalized.contains("shell") || normalized.contains("bash") {
+            return "terminal"
+        }
+        if normalized == "dir_pwd" || normalized == "pwd" || normalized == "dir_cd" || normalized == "dir_read" || normalized == "tree_view" || normalized.contains("tree_view") || normalized.hasPrefix("dir_") {
+            return "folder"
+        }
+        if normalized == "regex_search" || normalized == "search_text" || normalized == "text_search" {
+            return "text.magnifyingglass"
+        }
+        if normalized == "search_symbol" || normalized == "symbol_search" {
+            return "curlybraces"
+        }
+        if normalized == "file_read" || normalized == "read_file" {
+            return "doc.text"
+        }
 
         if normalized.hasPrefix("computer_") {
             if normalized.contains("screenshot") || normalized.contains("screen") {

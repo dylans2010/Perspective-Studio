@@ -508,6 +508,11 @@ public protocol AssistFileSystemProtocol: Sendable {
     func resolve(_ path: String) throws -> URL
     var currentDirectory: URL { get }
     func setCurrentDirectory(_ path: String) throws -> URL
+    func restoreCurrentDirectory(_ url: URL) throws
+}
+
+public extension AssistFileSystemProtocol {
+    func restoreCurrentDirectory(_ url: URL) throws {}
 }
 
 public final class AssistFileSystem: AssistFileSystemProtocol, @unchecked Sendable {
@@ -626,19 +631,32 @@ public final class AssistFileSystem: AssistFileSystemProtocol, @unchecked Sendab
             throw NSError(domain: "PathSecurityError", code: 403, userInfo: [NSLocalizedDescriptionKey: "No active project: workspace root is unavailable."])
         }
 
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("\0"), !trimmed.hasPrefix("~") else {
+            throw NSError(domain: "PathSecurityError", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid path: \(path)"])
+        }
+
+        let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
         let base: URL
         let normalizedPath: String
-        if path == workspaceRoot.path || path.hasPrefix(workspaceRoot.path + "/") {
+
+        if trimmed.hasPrefix("/") {
+            let absURL = URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath()
+            if absURL.path == root.path || absURL.path.hasPrefix(root.path + "/") {
+                return absURL
+            }
+            let rawRootPath = workspaceRoot.standardized.path
+            let absRaw = URL(fileURLWithPath: trimmed).standardized.path
+            if absRaw == rawRootPath || absRaw.hasPrefix(rawRootPath + "/") {
+                return absURL
+            }
             base = workspaceRoot
-            normalizedPath = String(path.dropFirst(workspaceRoot.path.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        } else if path.hasPrefix("/") {
-            base = workspaceRoot
-            normalizedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            normalizedPath = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         } else {
             base = currentDirectory
-            normalizedPath = path
+            normalizedPath = trimmed
         }
-        let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
+
         var probe = base.appendingPathComponent(normalizedPath).standardized
         var suffix: [String] = []
         while !fileManager.fileExists(atPath: probe.path) && probe.path != root.path && probe.path != base.standardized.path {
@@ -721,7 +739,11 @@ public struct AssistContext: Sendable {
         self.agentProjectID = agentProjectID
         self.memory = memory ?? DefaultAssistMemoryGraph()
         self.logger = logger ?? DefaultAssistLogger()
-        self.fileSystem = fileSystem ?? AssistFileSystem(workspaceRoot: workspaceRoot)
+        let fs = fileSystem ?? AssistFileSystem(workspaceRoot: workspaceRoot)
+        if let stored = AssistWorkingDirectoryStore.shared.currentDirectory(forSession: sessionId, agentProjectId: agentProjectID) {
+            try? fs.restoreCurrentDirectory(stored)
+        }
+        self.fileSystem = fs
         self.git = git ?? DefaultAssistGitManager()
         self.permissions = permissions ?? DefaultAssistPermissionsManager()
         self.safetyLevel = safetyLevel
@@ -824,15 +846,16 @@ public enum AssistWorkspacePaths {
 
     public static func resolve(_ raw: String, workspaceRoot: URL) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.contains("\0"), !trimmed.hasPrefix("~"), !trimmed.contains("..") else {
+        guard !trimmed.isEmpty, !trimmed.contains("\0"), !trimmed.hasPrefix("~") else {
             return nil
         }
-        let rootPath = workspaceRoot.standardized.path
+        let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let rootPath = root.path
         let candidate: URL
         if trimmed.hasPrefix("/") {
-            candidate = URL(fileURLWithPath: trimmed).standardized
+            candidate = URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath()
         } else {
-            candidate = workspaceRoot.appendingPathComponent(trimmed).standardized
+            candidate = workspaceRoot.appendingPathComponent(trimmed).standardizedFileURL.resolvingSymlinksInPath()
         }
         let candidatePath = candidate.path
         guard candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/") else {
@@ -842,13 +865,21 @@ public enum AssistWorkspacePaths {
     }
 
     public static func relative(_ url: URL, workspaceRoot: URL) -> String {
-        let rootPath = workspaceRoot.standardized.path
-        let path = url.standardized.path
+        let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let target = url.standardizedFileURL.resolvingSymlinksInPath()
+        let rootPath = root.path
+        let path = target.path
         if path == rootPath { return "." }
         if path.hasPrefix(rootPath + "/") {
             return String(path.dropFirst(rootPath.count + 1))
         }
-        return path
+        let rawRoot = workspaceRoot.standardized.path
+        let rawPath = url.standardized.path
+        if rawPath == rawRoot { return "." }
+        if rawPath.hasPrefix(rawRoot + "/") {
+            return String(rawPath.dropFirst(rawRoot.count + 1))
+        }
+        return url.lastPathComponent
     }
 
     public static func iso8601(_ date: Date) -> String {
@@ -858,15 +889,15 @@ public enum AssistWorkspacePaths {
     }
 }
 
-public enum AssistWorkspaceScan {
-    public static let skippedDirs: Set<String> = [
+nonisolated public enum AssistWorkspaceScan: Sendable {
+    nonisolated public static let skippedDirs: Set<String> = [
         ".git", ".build", "build", "DerivedData", ".swiftpm",
-        "Pods", "Carthage", "node_modules", ".venv"
+        "Pods", "Carthage", "node_modules", ".venv", "xcuserdata"
     ]
     public static let sourceExts: Set<String> = ["swift", "m", "mm", "h", "c", "cpp", "hpp"]
 
-    public static func scan(root: URL, query: String) -> [String] {
-        let files = AssistToolingSupport.enumeratedFiles(at: root)
+    public static func scan(root: URL, query: String, includeIgnored: Bool = false) -> [String] {
+        let files = AssistToolingSupport.enumeratedFiles(at: root, includeIgnored: includeIgnored)
         let needle = query.lowercased()
         var results: [String] = []
         for file in files {
@@ -877,26 +908,46 @@ public enum AssistWorkspaceScan {
         return results
     }
 
-    public static func files(under root: URL, extensions: Set<String>? = nil, maxFiles: Int = 20000) -> [URL] {
+    public static func files(
+        under root: URL,
+        extensions: Set<String>? = nil,
+        maxFiles: Int = 20000,
+        includeIgnored: Bool = false
+    ) -> [URL] {
         var results: [URL] = []
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
+        let options: FileManager.DirectoryEnumerationOptions = includeIgnored ? [] : [.skipsHiddenFiles]
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: options
+        ) else {
             return results
         }
-        let rootPath = root.standardized.path
-        while let url = enumerator.nextObject() as? URL, results.count < maxFiles {
-            let rel = url.standardized.path.replacingOccurrences(of: rootPath + "/", with: "")
-            if skippedDirs.contains(rel.split(separator: "/").first.map(String.init) ?? "") { continue }
+        let extSet = extensions.map { Set($0.map { $0.lowercased() }) }
+        while let url = enumerator.nextObject() as? URL {
+            if results.count >= maxFiles { break }
+            let name = url.lastPathComponent
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            if isDir { continue }
-            if let exts = extensions, !exts.contains(url.pathExtension.lowercased()) { continue }
+            if isDir {
+                if !includeIgnored && skippedDirs.contains(name) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            if !includeIgnored && skippedDirs.contains(name) {
+                continue
+            }
+            if let exts = extSet, !exts.contains(url.pathExtension.lowercased()) {
+                continue
+            }
             results.append(url)
         }
         return results
     }
 
-    public static func swiftFiles(under root: URL, maxFiles: Int = 8000) -> [URL] {
-        files(under: root, extensions: ["swift"], maxFiles: maxFiles)
+    public static func swiftFiles(under root: URL, maxFiles: Int = 8000, includeIgnored: Bool = false) -> [URL] {
+        files(under: root, extensions: ["swift"], maxFiles: maxFiles, includeIgnored: includeIgnored)
     }
 
     public static func readLines(_ url: URL) -> [String]? {
@@ -987,8 +1038,8 @@ public enum AssistArtifactNaming {
     }
 }
 
-public enum AssistToolingSupport {
-    public static func resolvePath(_ path: String?, workspaceRoot: URL) -> URL {
+nonisolated public enum AssistToolingSupport: Sendable {
+    nonisolated public static func resolvePath(_ path: String?, workspaceRoot: URL) -> URL {
         let rawPath = (path?.isEmpty == false ? path! : ".")
         if rawPath == "." { return workspaceRoot }
         let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
@@ -999,27 +1050,59 @@ public enum AssistToolingSupport {
         return resolved
     }
 
-    public static func relativePath(for url: URL, workspaceRoot: URL) -> String {
-        let root = workspaceRoot.path
-        if url.path.hasPrefix(root + "/") {
-            return String(url.path.dropFirst(root.count + 1))
+    nonisolated public static func relativePath(for url: URL, workspaceRoot: URL) -> String {
+        let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let target = url.standardizedFileURL.resolvingSymlinksInPath()
+        let rootPath = root.path
+        let targetPath = target.path
+        if targetPath == rootPath { return "." }
+        if targetPath.hasPrefix(rootPath + "/") {
+            return String(targetPath.dropFirst(rootPath.count + 1))
+        }
+        let rawRoot = workspaceRoot.standardized.path
+        let rawTarget = url.standardized.path
+        if rawTarget == rawRoot { return "." }
+        if rawTarget.hasPrefix(rawRoot + "/") {
+            return String(rawTarget.dropFirst(rawRoot.count + 1))
         }
         return url.lastPathComponent
     }
 
-    public static func enumeratedFiles(at root: URL, allowedExtensions: Set<String>? = nil, maxFileSize: Int = 500_000) -> [URL] {
+    nonisolated public static func enumeratedFiles(
+        at root: URL,
+        allowedExtensions: Set<String>? = nil,
+        maxFileSize: Int = 500_000,
+        includeIgnored: Bool = false
+    ) -> [URL] {
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey], options: [.skipsHiddenFiles]) else {
+        let options: FileManager.DirectoryEnumerationOptions = includeIgnored ? [] : [.skipsHiddenFiles]
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey],
+            options: options
+        ) else {
             return []
         }
 
         var files: [URL] = []
-        for case let fileURL as URL in enumerator {
-            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]), values.isRegularFile == true else {
+        let lowerExts = allowedExtensions.map { Set($0.map { $0.lowercased() }) }
+        while let fileURL = enumerator.nextObject() as? URL {
+            let name = fileURL.lastPathComponent
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]) else {
+                continue
+            }
+            if values.isDirectory == true {
+                if !includeIgnored && AssistWorkspaceScan.skippedDirs.contains(name) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard values.isRegularFile == true else { continue }
+            if !includeIgnored && AssistWorkspaceScan.skippedDirs.contains(name) {
                 continue
             }
             if let size = values.fileSize, size > maxFileSize { continue }
-            if let allowedExt = allowedExtensions, !allowedExt.contains(fileURL.pathExtension.lowercased()) {
+            if let allowedExt = lowerExts, !allowedExt.contains(fileURL.pathExtension.lowercased()) {
                 continue
             }
             files.append(fileURL)
@@ -1150,21 +1233,70 @@ public enum AssistArgvRunner {
 // MARK: - Search & Code Helpers
 
 public struct AssistSearchFunctions {
-    public static func searchText(in directory: URL, pattern: String, isRegex: Bool) throws -> [URL: [String]] {
+    public static func searchText(
+        in directory: URL,
+        pattern: String,
+        isRegex: Bool,
+        fileExtension: String? = nil,
+        maxResults: Int = 100,
+        includeIgnored: Bool = false
+    ) throws -> [URL: [String]] {
         let fileManager = FileManager.default
-        let enumerator = fileManager.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey], options: [.skipsHiddenFiles])
+        let options: FileManager.DirectoryEnumerationOptions = includeIgnored ? [] : [.skipsHiddenFiles]
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey],
+            options: options
+        ) else {
+            return [:]
+        }
 
         var results: [URL: [String]] = [:]
+        var totalMatches = 0
+        let targetExt = fileExtension?.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
 
-        while let fileURL = enumerator?.nextObject() as? URL {
-            let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-            guard resourceValues?.isRegularFile == true else { continue }
+        let binaryExtensions: Set<String> = [
+            "png", "jpg", "jpeg", "gif", "ico", "pdf", "zip", "tar", "gz",
+            "dylib", "a", "o", "so", "bin", "exe", "dmg", "pkg", "car", "nib",
+            "storyboardc", "ds_store"
+        ]
 
-            if let fileSize = resourceValues?.fileSize, fileSize > 1_000_000 {
+        let regex: NSRegularExpression?
+        if isRegex {
+            regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        } else {
+            regex = nil
+        }
+
+        while let fileURL = enumerator.nextObject() as? URL {
+            if totalMatches >= maxResults { break }
+            let name = fileURL.lastPathComponent
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]) else {
                 continue
             }
 
-            let binaryExtensions = ["png", "jpg", "jpeg", "gif", "pdf", "zip", "exe", "dylib", "a"]
+            if resourceValues.isDirectory == true {
+                if !includeIgnored && AssistWorkspaceScan.skippedDirs.contains(name) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+
+            guard resourceValues.isRegularFile == true else { continue }
+            if !includeIgnored && AssistWorkspaceScan.skippedDirs.contains(name) {
+                continue
+            }
+
+            if let targetExt = targetExt, !targetExt.isEmpty {
+                if fileURL.pathExtension.lowercased() != targetExt {
+                    continue
+                }
+            }
+
+            if let fileSize = resourceValues.fileSize, fileSize > 2_000_000 {
+                continue
+            }
+
             if binaryExtensions.contains(fileURL.pathExtension.lowercased()) {
                 continue
             }
@@ -1173,9 +1305,9 @@ public struct AssistSearchFunctions {
             let lines = content.components(separatedBy: .newlines)
             var matches: [String] = []
 
-            if isRegex {
-                let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+            if let regex = regex {
                 for (index, line) in lines.enumerated() {
+                    if totalMatches + matches.count >= maxResults { break }
                     let range = NSRange(location: 0, length: line.utf16.count)
                     if regex.firstMatch(in: line, options: [], range: range) != nil {
                         matches.append("\(index + 1): \(line)")
@@ -1183,6 +1315,7 @@ public struct AssistSearchFunctions {
                 }
             } else {
                 for (index, line) in lines.enumerated() {
+                    if totalMatches + matches.count >= maxResults { break }
                     if line.localizedCaseInsensitiveContains(pattern) {
                         matches.append("\(index + 1): \(line)")
                     }
@@ -1191,6 +1324,7 @@ public struct AssistSearchFunctions {
 
             if !matches.isEmpty {
                 results[fileURL] = matches
+                totalMatches += matches.count
             }
         }
 
@@ -1485,6 +1619,23 @@ public final class AssistWorkingDirectoryStore: @unchecked Sendable {
 
     public func setCurrentDirectory(_ directory: URL, for sessionId: UUID) {
         lock.withLock { directories[sessionId] = directory }
+    }
+
+    public func currentDirectory(forSession sessionId: UUID, agentProjectId: UUID? = nil) -> URL? {
+        lock.withLock {
+            if let dir = directories[sessionId] { return dir }
+            if let pid = agentProjectId, let dir = directories[pid] { return dir }
+            return nil
+        }
+    }
+
+    public func setCurrentDirectory(_ directory: URL, forSession sessionId: UUID, agentProjectId: UUID? = nil) {
+        lock.withLock {
+            directories[sessionId] = directory
+            if let pid = agentProjectId {
+                directories[pid] = directory
+            }
+        }
     }
 
     public func remove(for sessionId: UUID) {

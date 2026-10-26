@@ -407,7 +407,8 @@ final class ContextIndexManagerTests: XCTestCase {
     func testCoreToolIDsIncludesEssentialTools() {
         let expected: Set<String> = [
             "context_index_search", "system_asset_lookup", "file_read", "file_search",
-            "dir_read", "search_text", "tree_view", "file_create"
+            "dir_read", "search_text", "tree_view", "file_create",
+            "use_terminal", "project_inspect", "dir_pwd"
         ]
         XCTAssertTrue(expected.isSubset(of: ContextIndexManager.coreToolIDs))
     }
@@ -440,6 +441,31 @@ final class ContextIndexManagerTests: XCTestCase {
             XCTAssertTrue(ContextIndexManager.isRelevant(entry: searchTool, queryTokens: tokens), "file_search should be relevant for '\(query)'")
             XCTAssertTrue(ContextIndexManager.isRelevant(entry: dirTool, queryTokens: tokens), "dir_read should be relevant for '\(query)'")
         }
+    }
+
+    func testTerminalAndInspectionToolsRelevance() {
+        let entries = makeIndex(
+            mode: .agent,
+            tools: [
+                AssistTerminalTool(),
+                AssistProjectInspectTool(),
+                AssistPrintWorkingDirectoryTool()
+            ]
+        )
+
+        let terminalTool = entries.first { $0.id == "tool:use_terminal" }!
+        let projectInspectTool = entries.first { $0.id == "tool:project_inspect" }!
+        let pwdTool = entries.first { $0.id == "tool:dir_pwd" }!
+
+        XCTAssertTrue(terminalTool.isCoreTool)
+        XCTAssertTrue(projectInspectTool.isCoreTool)
+        XCTAssertTrue(pwdTool.isCoreTool)
+
+        let termQuery = ContextIndexManager.tokenize("run swift build in terminal")
+        XCTAssertTrue(ContextIndexManager.isRelevant(entry: terminalTool, queryTokens: termQuery))
+
+        let inspectQuery = ContextIndexManager.tokenize("inspect project structure")
+        XCTAssertTrue(ContextIndexManager.isRelevant(entry: projectInspectTool, queryTokens: inspectQuery))
     }
 
     // MARK: - Index cache
