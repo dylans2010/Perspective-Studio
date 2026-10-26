@@ -215,6 +215,7 @@ public final class AntigravityAgentHarness {
     /// (`ToolsRegistry`).
     func run(
         prompt: String,
+        conversationHistory: [Turn]? = nil,
         modelID: String? = nil,
         workspaceRoot: URL = URL.documentsDirectory,
         projectID: UUID? = nil,
@@ -328,6 +329,7 @@ public final class AntigravityAgentHarness {
         if #available(macOS 26.0, *), selectedBackend.backendID == AppleFoundationModel.backendID {
             return await FoundationModelAgentRunner.run(
                 prompt: prompt,
+                conversationHistory: conversationHistory,
                 workspaceRoot: workspaceRoot,
                 projectID: projectID,
                 maxTurns: maxTurns,
@@ -417,7 +419,13 @@ public final class AntigravityAgentHarness {
             if decision.isToolAttempt {
                 return ("", split.thinking, true)
             }
+            if AntigravityLoopEngine.describesPendingAction(split.answer) {
+                return ("", split.thinking, true)
+            }
             let cleaned = AntigravityLoopEngine.cleanFinalAnswer(split.answer, knownToolIDs: knownToolIDs)
+            if AntigravityLoopEngine.describesPendingAction(cleaned) {
+                return ("", split.thinking, true)
+            }
             return (cleaned, split.thinking, false)
         }
 
@@ -430,9 +438,9 @@ public final class AntigravityAgentHarness {
                 direct = await directTurn(extraInstruction: "[This Turn — retry]: Answer in plain conversational text only. Do not call, mention, or describe any tool, skill, or instruction.")
             }
 
-            if intent == .direct && direct.wantsTool {
-                // Escalation: the question genuinely needs a tool after
-                // all — fall through to the full loop below.
+            if direct.wantsTool {
+                // Escalation: the model requested a tool or described pending action / unexecuted capability —
+                // fall through to the full agent tool loop below so that the tool is actually executed!
             } else {
                 let answer = direct.answer
                 addStep(AgentStep(kind: .finalAnswer, title: "Final Answer", detail: answer))
@@ -485,9 +493,17 @@ public final class AntigravityAgentHarness {
             detail: "Target Model: \(targetModelID)\nGoal: \(prompt)"
         ))
 
-        var conversationTurns: [Turn] = [
-            Turn(role: "user", content: prompt)
-        ]
+        var conversationTurns: [Turn]
+        if let conversationHistory, !conversationHistory.isEmpty {
+            conversationTurns = conversationHistory
+            if conversationTurns.last?.role != "user" || conversationTurns.last?.content != prompt {
+                conversationTurns.append(Turn(role: "user", content: prompt))
+            }
+        } else {
+            conversationTurns = [
+                Turn(role: "user", content: prompt)
+            ]
+        }
 
         var finalAnswer: String = ""
         var turnCount = 0
@@ -611,30 +627,7 @@ public final class AntigravityAgentHarness {
             // on the raw text could execute an action the model only
             // thought about. (The direct-turn path already decided on
             // the split answer; the loop now matches it.)
-            switch AntigravityLoopEngine.decide(turnText: turnSplit.answer, catalog: catalog) {
-            case .callTool(let toolId, let codableArgs):
-                // A cancelled or expired run dispatches NOTHING further,
-                // however the model turn classified: cancellation is
-                // checked at the dispatch point itself, not only between
-                // turns, so a stop that lands mid-turn cannot leak one
-                // last tool execution.
-                if isRunCancelled(thisRunID) {
-                    dispatchStatus(.idle)
-                    return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
-                }
-                if runExpired() {
-                    loopStoppedReason = runTimeoutReason()
-                    break loop
-                }
-                // Execution budget: a run may not spin through tools forever.
-                guard toolCallsExecuted < executionBudget else {
-                    loopStoppedReason = "I stopped this run at the tool limit (\(executionBudget) actions). The steps from this run show what was executed; anything after the limit did not run."
-                    break loop
-                }
-
-                // No-progress guard: the same tool with the same
-                // arguments cannot produce new information a third time.
-                // Stop and say so instead of burning the turn budget.
+            func executeSingleTool(toolId: String, codableArgs: [String: AnyCodableValue]) async -> (success: Bool, output: String)? {
                 let validated = ValidatedToolCall(toolID: toolId, toolName: ToolNameFormatter.format(toolId), arguments: codableArgs)
                 if AntigravityLoopEngine.isNoProgressRepeat(signature: validated.signature, previousSignatures: executedSignatures) {
                     addStep(AgentStep(
@@ -643,18 +636,15 @@ public final class AntigravityAgentHarness {
                         detail: "The model requested the same action with the same inputs again after \(AntigravityLoopEngine.maxIdenticalToolExecutions) identical executions. Repeating it cannot make progress, so the run stopped."
                     ))
                     loopStoppedReason = "I stopped this run because the same step was repeated with identical inputs and could not make further progress. \(toolCallsExecuted) tool step(s) ran before that — the steps from this run show what was done."
-                    break loop
+                    return nil
                 }
                 guard let tool = ToolsRegistry.shared.tool(for: toolId) else {
-                    // The catalog and the registry are built from the same
-                    // source; a miss here means the registry changed mid-run.
                     rejectedToolCalls += 1
                     conversationTurns.append(Turn(role: "user", content: AntigravityLoopEngine.correctionPrompt(rejection: .unknownTool(toolId))))
                     if rejectedToolCalls >= AntigravityLoopEngine.maxRejectedToolCalls {
                         loopStoppedReason = "I stopped this run because the action it requested is no longer available. Nothing further was executed."
-                        break loop
                     }
-                    continue
+                    return nil
                 }
                 executedSignatures.append(validated.signature)
                 toolCallsExecuted += 1
@@ -687,9 +677,6 @@ public final class AntigravityAgentHarness {
                 )
                 addStep(callStep)
 
-                // Execute the real implementation, bounded by the run's
-                // per-call timeout. A throw or a timeout is a failure result,
-                // never a fabricated success.
                 let execution = await ToolExecutor.execute(
                     tool: tool,
                     arguments: args,
@@ -711,8 +698,6 @@ public final class AntigravityAgentHarness {
                 onEvent?(.toolExecutionFinished(tool: toolId, result: result))
 
                 if !result.success {
-                    // A failed call is not a completed step. The model is told
-                    // exactly that, so it cannot report the action as done.
                     addStep(AgentStep(
                         kind: .error,
                         title: "\(ToolNameFormatter.format(toolId)) Failed",
@@ -732,20 +717,158 @@ public final class AntigravityAgentHarness {
                     ))
                 }
 
-                // Feed tool result back into conversation turns. The
-                // assistant turn is recorded as a neutral marker, not the
-                // raw invocation text, so the model's own history stops
-                // teaching it to paste invocations into prose.
-                // A plain sentence, not a bracketed marker: bracketed
-                // loop-control strings in the history taught models to
-                // emit "[Answer withheld]"-style artifacts as prose.
-                conversationTurns.append(Turn(role: "assistant", content: "I completed a step using a tool."))
-                conversationTurns.append(Turn(
-                    role: "user",
-                    content: AntigravityLoopEngine.observationPrompt(toolID: toolId, output: result.output, success: result.success)
-                ))
+                return (result.success, result.output)
+            }
 
+            switch AntigravityLoopEngine.decide(turnText: turnSplit.answer, catalog: catalog) {
+            case .callTool(let toolId, let codableArgs):
+                if isRunCancelled(thisRunID) {
+                    dispatchStatus(.idle)
+                    return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
+                }
+                if runExpired() {
+                    loopStoppedReason = runTimeoutReason()
+                    break loop
+                }
+                guard toolCallsExecuted < executionBudget else {
+                    loopStoppedReason = "I stopped this run at the tool limit (\(executionBudget) actions). The steps from this run show what was executed; anything after the limit did not run."
+                    break loop
+                }
+
+                if let outcome = await executeSingleTool(toolId: toolId, codableArgs: codableArgs) {
+                    conversationTurns.append(Turn(role: "assistant", content: "I completed a step using a tool."))
+                    conversationTurns.append(Turn(
+                        role: "user",
+                        content: AntigravityLoopEngine.observationPrompt(toolID: toolId, output: outcome.output, success: outcome.success)
+                    ))
+                } else if loopStoppedReason != nil {
+                    break loop
+                }
                 self.activeToolName = nil
+
+            case .callTools(let calls):
+                if isRunCancelled(thisRunID) {
+                    dispatchStatus(.idle)
+                    return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
+                }
+                if runExpired() {
+                    loopStoppedReason = runTimeoutReason()
+                    break loop
+                }
+                guard toolCallsExecuted < executionBudget else {
+                    loopStoppedReason = "I stopped this run at the tool limit (\(executionBudget) actions). The steps from this run show what was executed; anything after the limit did not run."
+                    break loop
+                }
+
+                var multiObservations: [(toolID: String, output: String, success: Bool)] = []
+                for call in calls {
+                    if isRunCancelled(thisRunID) || runExpired() || toolCallsExecuted >= executionBudget {
+                        break
+                    }
+                    if let outcome = await executeSingleTool(toolId: call.toolID, codableArgs: call.arguments) {
+                        multiObservations.append((toolID: call.toolID, output: outcome.output, success: outcome.success))
+                    } else if loopStoppedReason != nil {
+                        break
+                    }
+                }
+                if !multiObservations.isEmpty {
+                    conversationTurns.append(Turn(role: "assistant", content: "I completed multiple steps using tools."))
+                    conversationTurns.append(Turn(
+                        role: "user",
+                        content: AntigravityLoopEngine.multiObservationPrompt(results: multiObservations)
+                    ))
+                }
+                if loopStoppedReason != nil {
+                    break loop
+                }
+                self.activeToolName = nil
+
+            case .callTools(let calls):
+                if isRunCancelled(thisRunID) {
+                    dispatchStatus(.idle)
+                    return AgentExecutionOutcome(answer: "Execution was cancelled.", steps: steps, success: false)
+                }
+                if runExpired() {
+                    loopStoppedReason = runTimeoutReason()
+                    break loop
+                }
+                for (toolId, codableArgs) in calls {
+                    guard toolCallsExecuted < executionBudget else {
+                        loopStoppedReason = "I stopped this run at the tool limit (\(executionBudget) actions). The steps from this run show what was executed; anything after the limit did not run."
+                        break loop
+                    }
+                    guard let tool = ToolsRegistry.shared.tool(for: toolId) else {
+                        rejectedToolCalls += 1
+                        conversationTurns.append(Turn(role: "user", content: AntigravityLoopEngine.correctionPrompt(rejection: .unknownTool(toolId))))
+                        continue
+                    }
+                    let validated = ValidatedToolCall(toolID: toolId, toolName: ToolNameFormatter.format(toolId), arguments: codableArgs)
+                    executedSignatures.append(validated.signature)
+                    toolCallsExecuted += 1
+                    narrationTurns = 0
+
+                    let args = codableArgs
+                    let preview = sanitizedArgumentPreview(args)
+                    var record = ToolCallRecord(toolID: toolId, arguments: preview, status: .running, startedAt: .now)
+                    toolCallRecords.append(record)
+                    onEvent?(.toolCallRecordUpdated(record))
+
+                    self.activeToolName = toolId
+                    dispatchStatus(.callingTool(name: toolId))
+                    onEvent?(.toolCallDetected(tool: toolId, arguments: args.mapValues(\.anyValue)))
+                    onEvent?(.toolExecutionStarted(tool: toolId))
+
+                    let callStep = AgentStep(
+                        kind: .toolCall,
+                        title: ToolNameFormatter.format(toolId),
+                        detail: formatArgumentsPreview(args.mapValues(\.anyValue)),
+                        rawPayload: turnResponse,
+                        toolName: toolId,
+                        toolArguments: args.mapValues(\.anyValue),
+                        callID: record.id.uuidString
+                    )
+                    addStep(callStep)
+
+                    let execution = await ToolExecutor.execute(tool: tool, arguments: args, context: assistContext, timeout: toolTimeout)
+                    let result = execution.result
+                    record.status = result.success ? .completed : .failed(result.error ?? "Execution failed")
+                    record.result = result.output
+                    record.duration = execution.duration
+                    record.completedAt = .now
+                    if let index = toolCallRecords.firstIndex(where: { $0.id == record.id }) {
+                        toolCallRecords[index] = record
+                    }
+                    onEvent?(.toolCallRecordUpdated(record))
+                    dispatchStatus(.toolCompleted(name: toolId))
+                    onEvent?(.toolExecutionFinished(tool: toolId, result: result))
+
+                    if !result.success {
+                        addStep(AgentStep(
+                            kind: .error,
+                            title: "\(ToolNameFormatter.format(toolId)) Failed",
+                            detail: result.error ?? result.output,
+                            toolName: toolId,
+                            toolResult: result,
+                            callID: record.id.uuidString
+                        ))
+                    } else {
+                        addStep(AgentStep(
+                            kind: .toolResult,
+                            title: ToolNameFormatter.completedTitle(for: toolId),
+                            detail: result.output,
+                            toolName: toolId,
+                            toolResult: result,
+                            callID: record.id.uuidString
+                        ))
+                    }
+
+                    conversationTurns.append(Turn(role: "assistant", content: "I completed a step using a tool."))
+                    conversationTurns.append(Turn(
+                        role: "user",
+                        content: AntigravityLoopEngine.observationPrompt(toolID: toolId, output: result.output, success: result.success)
+                    ))
+                    self.activeToolName = nil
+                }
 
             case .invalidToolCall(_, let rejection):
                 // Nothing was executed. The turn's text (the model's own
@@ -1012,9 +1135,14 @@ public final class AntigravityAgentHarness {
         return prompt
     }
 
-    struct Turn {
-        let role: String
-        let content: String
+    public struct Turn: Sendable, Equatable {
+        public let role: String
+        public let content: String
+
+        public init(role: String, content: String) {
+            self.role = role
+            self.content = content
+        }
     }
 
     /// Total character budget for one assembled loop prompt. The system
@@ -1102,56 +1230,170 @@ public final class AntigravityAgentHarness {
 
     // MARK: - Tool Call Parser
 
-    /// Extracts a tool request from the runtime's tool-call channel only.
-    ///
-    /// The channel is the `TOOL_CALL` marker (optionally followed by one JSON
-    /// object) and the `<tool_call>` / `<function_call>` wrappers — the formats
-    /// chat templates and the system prompt actually use for calling tools.
-    ///
-    /// Plain prose is never scanned for JSON: a command in a fenced block, a
-    /// config example, or a sentence naming a tool is *content*, and treating
-    /// it as an invocation is how a model's description of work used to become
-    /// an executed call. Extraction here is purely syntactic — identity and
-    /// arguments are validated afterwards by `ToolCallValidator`.
-    public nonisolated static func parseToolCall(in text: String) -> (toolId: String, arguments: [String: Any])? {
-        // The text protocol is a transport channel, not a substring search.
-        // A model may explain or quote `TOOL_CALL` in ordinary prose or in a
-        // fenced example; treating that as an invocation is both surprising
-        // and unsafe. Accept only a standalone protocol line (allowing
-        // indentation), exactly as the agent prompt specifies.
+    /// Extracts all tool requests from the turn text. Supports:
+    /// - `TOOL_CALL: {...}` (with optional colon)
+    /// - `TOOL_CALL\n{...}` (newline before payload)
+    /// - Standalone line `TOOL_CALL {"tool": ...}`
+    /// - Fenced code blocks containing `TOOL_CALL` or `{"tool": ...}`
+    /// - `<tool_call>...` and `<tool_calls>...` wrappers
+    /// - `<function=tool_name>...` and `<function name="tool_name">...` tags
+    public nonisolated static func parseToolCalls(in text: String) -> [(toolId: String, arguments: [String: Any])] {
+        let lowered = text.lowercased()
+        let isDocExample = lowered.contains("here is an example") || lowered.contains("here is the payload shape")
+
+        var results: [(toolId: String, arguments: [String: Any])] = []
+
+        // 1. XML-style wrappers: <tool_call>, <function_call>, <tool_calls>, <function_calls>
+        for tag in ["tool_call", "function_call", "tool_calls", "function_calls"] {
+            var searchStart = text.startIndex
+            while let open = text.range(of: "<\(tag)", options: .caseInsensitive, range: searchStart..<text.endIndex) {
+                let close = text.range(of: "</\(tag)>", options: .caseInsensitive, range: open.upperBound..<text.endIndex)
+                let tagSlice = close != nil ? text[open.upperBound..<close!.lowerBound] : text[open.upperBound...]
+
+                var sliceRemaining = tagSlice
+                while let data = balancedJSON(in: sliceRemaining),
+                      let parsed = decodeToolCallData(data) {
+                    if !results.contains(where: { $0.toolId == parsed.toolId && NSDictionary(dictionary: $0.arguments).isEqual(to: parsed.arguments) }) {
+                        results.append(parsed)
+                    }
+                    if let str = String(data: data, encoding: .utf8),
+                       let r = sliceRemaining.range(of: str) {
+                        sliceRemaining = sliceRemaining[r.upperBound...]
+                    } else {
+                        break
+                    }
+                }
+
+                searchStart = close?.upperBound ?? open.upperBound
+            }
+        }
+
+        // 2. <function=...> or <function name="..."> tags
+        // e.g. <function=file_read>{"path": "foo"}</function>
+        var funcSearchStart = text.startIndex
+        while funcSearchStart < text.endIndex {
+            guard let funcRange = text.range(of: "<function", options: .caseInsensitive, range: funcSearchStart..<text.endIndex) else {
+                break
+            }
+            let remainder = text[funcRange.upperBound...]
+            guard let tagEnd = remainder.firstIndex(of: ">") else { break }
+            let tagHeader = remainder[..<tagEnd].trimmingCharacters(in: .whitespaces)
+
+            var extractedToolId: String? = nil
+            if tagHeader.hasPrefix("=") {
+                extractedToolId = String(tagHeader.dropFirst()).trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\"'")))
+            } else if let nameRange = tagHeader.range(of: "name=", options: .caseInsensitive) {
+                let afterName = tagHeader[nameRange.upperBound...].trimmingCharacters(in: .whitespaces)
+                extractedToolId = afterName.trimmingCharacters(in: CharacterSet(charactersIn: "\"' \t\n\r"))
+            }
+
+            let afterTag = remainder[remainder.index(after: tagEnd)...]
+            let closeTag = text.range(of: "</function>", options: .caseInsensitive, range: tagEnd..<text.endIndex)
+            let bodySlice = closeTag != nil ? text[text.index(after: tagEnd)..<closeTag!.lowerBound] : afterTag
+
+            if let toolId = extractedToolId, !toolId.isEmpty,
+               let data = balancedJSON(in: bodySlice) {
+                if let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                    let args = (json["arguments"] ?? json["parameters"] ?? json["input"]) as? [String: Any] ?? json
+                    let parsed = (toolId: toolId, arguments: args)
+                    if !results.contains(where: { $0.toolId == parsed.toolId && NSDictionary(dictionary: $0.arguments).isEqual(to: parsed.arguments) }) {
+                        results.append(parsed)
+                    }
+                }
+            }
+
+            funcSearchStart = closeTag?.upperBound ?? remainder.index(after: tagEnd)
+        }
+
+        // 3. Fenced code blocks (when not part of a documentation/example explanation)
+        if !isDocExample {
+            let lines = text.components(separatedBy: .newlines)
+            var insideFence = false
+            var fenceContent = ""
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("```") {
+                    if insideFence {
+                        let trimmedContent = fenceContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let data = balancedJSON(in: trimmedContent[...]),
+                           let parsed = decodeToolCallData(data) {
+                            if !results.contains(where: { $0.toolId == parsed.toolId && NSDictionary(dictionary: $0.arguments).isEqual(to: parsed.arguments) }) {
+                                results.append(parsed)
+                            }
+                        } else if trimmedContent.uppercased().contains("TOOL_CALL") {
+                            if let toolCallRange = trimmedContent.range(of: "TOOL_CALL", options: .caseInsensitive) {
+                                let after = trimmedContent[toolCallRange.upperBound...].trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ":")))
+                                if let data = balancedJSON(in: after[...]),
+                                   let parsed = decodeToolCallData(data) {
+                                    if !results.contains(where: { $0.toolId == parsed.toolId && NSDictionary(dictionary: $0.arguments).isEqual(to: parsed.arguments) }) {
+                                        results.append(parsed)
+                                    }
+                                }
+                            }
+                        }
+                        fenceContent = ""
+                        insideFence = false
+                    } else {
+                        insideFence = true
+                        fenceContent = ""
+                    }
+                    continue
+                }
+                if insideFence {
+                    fenceContent += line + "\n"
+                }
+            }
+        }
+
+        // 4. Standalone TOOL_CALL or TOOL_CALL: lines in text (outside code fences)
         var insideCodeFence = false
-        for line in text.components(separatedBy: .newlines) {
+        let lines = text.components(separatedBy: .newlines)
+        var lineIndex = 0
+        while lineIndex < lines.count {
+            let line = lines[lineIndex]
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("```") {
                 insideCodeFence.toggle()
+                lineIndex += 1
                 continue
             }
-            guard !insideCodeFence, trimmed.uppercased().hasPrefix("TOOL_CALL") else { continue }
-            let suffix = trimmed.dropFirst("TOOL_CALL".count)
-            guard suffix.first?.isWhitespace == true else { continue }
-            let remainder = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard remainder.first == "{",
-                  let data = balancedJSON(in: remainder[...]),
-                  let parsed = decodeToolCallData(data) else { continue }
-            // A transport line contains only the payload; trailing prose
-            // makes it a display/example line rather than a dispatch.
-            if let payload = String(data: data, encoding: .utf8), remainder == payload {
-                return parsed
+            if !insideCodeFence, trimmed.uppercased().hasPrefix("TOOL_CALL") {
+                var suffix = trimmed.dropFirst("TOOL_CALL".count)
+                if suffix.first == ":" {
+                    suffix = suffix.dropFirst()
+                }
+                let remainder = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
+                if remainder.isEmpty {
+                    // TOOL_CALL\n{...}
+                    if lineIndex + 1 < lines.count {
+                        let nextLines = lines[(lineIndex + 1)...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let data = balancedJSON(in: nextLines[...]),
+                           let parsed = decodeToolCallData(data) {
+                            if !results.contains(where: { $0.toolId == parsed.toolId && NSDictionary(dictionary: $0.arguments).isEqual(to: parsed.arguments) }) {
+                                results.append(parsed)
+                            }
+                        }
+                    }
+                } else {
+                    // TOOL_CALL {...} or TOOL_CALL: {...}
+                    if let data = balancedJSON(in: remainder[...]),
+                       let parsed = decodeToolCallData(data) {
+                        if let payload = String(data: data, encoding: .utf8), remainder.trimmingCharacters(in: .whitespacesAndNewlines) == payload.trimmingCharacters(in: .whitespacesAndNewlines) {
+                            if !results.contains(where: { $0.toolId == parsed.toolId && NSDictionary(dictionary: $0.arguments).isEqual(to: parsed.arguments) }) {
+                                results.append(parsed)
+                            }
+                        }
+                    }
+                }
             }
+            lineIndex += 1
         }
 
-        // XML-style wrapper a chat template may emit around the call.
-        for tag in ["tool_call", "function_call", "tool_calls", "function_calls"] {
-            guard let open = text.range(of: "<\(tag)", options: .caseInsensitive) else { continue }
-            let body = text[open.upperBound...]
-            if let start = body.firstIndex(of: "{"),
-               let data = balancedJSON(in: body[start...]),
-               let parsed = decodeToolCallData(data) {
-                return parsed
-            }
-        }
+        return results
+    }
 
-        return nil
+    public nonisolated static func parseToolCall(in text: String) -> (toolId: String, arguments: [String: Any])? {
+        parseToolCalls(in: text).first
     }
 
     /// True when the text contains the tool-call channel but its payload could
@@ -1159,6 +1401,9 @@ public final class AntigravityAgentHarness {
     /// an answer: printing it would leak protocol text and executing it would
     /// be guesswork.
     public nonisolated static func containsToolCallChannel(_ text: String) -> Bool {
+        if !parseToolCalls(in: text).isEmpty {
+            return true
+        }
         var insideCodeFence = false
         for line in text.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1166,13 +1411,14 @@ public final class AntigravityAgentHarness {
                 insideCodeFence.toggle()
                 continue
             }
-            if !insideCodeFence, trimmed.uppercased().hasPrefix("TOOL_CALL"),
-               trimmed.dropFirst("TOOL_CALL".count).first?.isWhitespace == true {
+            if !insideCodeFence, trimmed.uppercased().hasPrefix("TOOL_CALL") {
                 return true
             }
         }
-        for tag in ["tool_call", "function_call"] where text.range(of: "<\(tag)", options: .caseInsensitive) != nil {
-            return true
+        for tag in ["tool_call", "function_call", "tool_calls", "function_calls", "function="] {
+            if text.range(of: "<\(tag)", options: .caseInsensitive) != nil {
+                return true
+            }
         }
         return false
     }
@@ -1182,24 +1428,38 @@ public final class AntigravityAgentHarness {
             return nil
         }
 
-        // Support { "tool": "..." } or { "name": "..." }
+        // Support { "tool": "..." } or { "name": "..." } or { "function": "..." }
         guard let toolId = (json["tool"] ?? json["name"] ?? json["function"]) as? String,
-              !toolId.isEmpty else {
+              !toolId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
 
-        // Support { "arguments": { ... } } or { "parameters": { ... } }
-        let rawArgs = (json["arguments"] ?? json["parameters"] ?? json["input"]) as? [String: Any] ?? [:]
-        return (toolId, rawArgs)
+        // Support { "arguments": { ... } } or { "parameters": { ... } } or { "input": { ... } }
+        let rawArgs: [String: Any]
+        if let argsObj = (json["arguments"] ?? json["parameters"] ?? json["input"]) as? [String: Any] {
+            rawArgs = argsObj
+        } else if let argsStr = (json["arguments"] ?? json["parameters"] ?? json["input"]) as? String,
+                  let parsed = (try? JSONSerialization.jsonObject(with: Data(argsStr.utf8))) as? [String: Any] {
+            rawArgs = parsed
+        } else {
+            var filtered = json
+            filtered.removeValue(forKey: "tool")
+            filtered.removeValue(forKey: "name")
+            filtered.removeValue(forKey: "function")
+            rawArgs = filtered
+        }
+        return (toolId.trimmingCharacters(in: .whitespacesAndNewlines), rawArgs)
     }
 
-    /// Finds the balanced `{...}` JSON substring at the start of `text`.
+    /// Finds the balanced `{...}` JSON substring starting at the first `{` in `text`.
     private nonisolated static func balancedJSON(in text: Substring) -> Data? {
+        guard let firstBrace = text.firstIndex(of: "{") else { return nil }
+        let slice = text[firstBrace...]
         var depth = 0
         var inString = false
         var escaped = false
 
-        for (offset, char) in text.enumerated() {
+        for (offset, char) in slice.enumerated() {
             if escaped {
                 escaped = false
                 continue
@@ -1219,8 +1479,8 @@ public final class AntigravityAgentHarness {
             } else if char == "}" {
                 depth -= 1
                 if depth == 0 {
-                    let endIndex = text.index(text.startIndex, offsetBy: offset + 1)
-                    return Data(text[text.startIndex..<endIndex].utf8)
+                    let endIndex = slice.index(slice.startIndex, offsetBy: offset + 1)
+                    return Data(slice[slice.startIndex..<endIndex].utf8)
                 }
             }
         }

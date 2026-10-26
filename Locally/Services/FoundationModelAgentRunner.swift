@@ -26,10 +26,13 @@ enum FoundationModelAgentRunner {
         "hardware_info",
         "model_library",
         "system_asset_lookup",
+        "file_search",
         "file_read",
         "dir_read",
         "search_text",
-        "tree_view"
+        "tree_view",
+        "file_create",
+        "file_write"
     ]
 
     /// Computer Use candidate subset for the on-device model when the
@@ -91,6 +94,9 @@ enum FoundationModelAgentRunner {
         computerUseEnabled: Bool
     ) -> [String] {
         var selected: [String] = ["context_index_search", "system_asset_lookup"]
+        for id in ["file_read", "file_search", "dir_read"] where !selected.contains(id) {
+            selected.append(id)
+        }
         if projectActive {
             for id in ["project_memory", "tree_view"] where !selected.contains(id) {
                 selected.append(id)
@@ -120,6 +126,7 @@ enum FoundationModelAgentRunner {
 
     static func run(
         prompt: String,
+        conversationHistory: [AntigravityAgentHarness.Turn]? = nil,
         workspaceRoot: URL,
         projectID: UUID? = nil,
         maxTurns: Int,
@@ -246,10 +253,19 @@ enum FoundationModelAgentRunner {
         let instructions = buildInstructions(intent: intent, additionalSystemPrompt: additionalSystemPrompt)
         let session = LanguageModelSession(tools: bridges, instructions: instructions)
 
+        var effectivePrompt = prompt
+        if let conversationHistory, !conversationHistory.isEmpty {
+            var turns = conversationHistory
+            if turns.last?.role != "user" || turns.last?.content != prompt {
+                turns.append(AntigravityAgentHarness.Turn(role: "user", content: prompt))
+            }
+            effectivePrompt = AntigravityAgentHarness.assemblePrompt(turns: turns)
+        }
+
         var answer = ""
         var previous = ""
         do {
-            for try await snapshot in session.streamResponse(to: prompt, options: GenerationOptions(temperature: 0.4, maximumResponseTokens: GenerationDefaults.maxAppleModelOutputTokens)) {
+            for try await snapshot in session.streamResponse(to: effectivePrompt, options: GenerationOptions(temperature: 0.4, maximumResponseTokens: GenerationDefaults.maxAppleModelOutputTokens)) {
                 if runCancelled() {
                     eventPump.cancel()
                     toolEventsContinuation.finish()

@@ -656,8 +656,30 @@ final class ChatViewModel {
             assistantMessage.content = ToolInvocationSanitizer.displayText(for: rawStreamed, knownToolIDs: knownToolIDs)
             lastStreamFlush = now
         }
+        // Build recent conversation history turns (e.g. last 4 messages before the latest user message)
+        let allMessages = conversation.sortedMessages.filter { $0.id != assistantMessage.id }
+        var historyTurns: [AntigravityAgentHarness.Turn] = []
+        if let userIndex = allMessages.lastIndex(where: { $0.role == .user }) {
+            let priorMessages = allMessages[0..<userIndex].suffix(4)
+            for msg in priorMessages {
+                let roleString: String = {
+                    switch msg.role {
+                    case .user: return "user"
+                    case .assistant: return "assistant"
+                    case .system: return "system"
+                    }
+                }()
+                let visible = ThinkingContentParser.visibleContent(of: msg.content).trimmingCharacters(in: .whitespacesAndNewlines)
+                let text = visible.isEmpty ? msg.content.trimmingCharacters(in: .whitespacesAndNewlines) : visible
+                if !text.isEmpty {
+                    historyTurns.append(AntigravityAgentHarness.Turn(role: roleString, content: text))
+                }
+            }
+        }
+
         let outcome = await AntigravityAgentHarness.shared.run(
             prompt: userPrompt,
+            conversationHistory: historyTurns.isEmpty ? nil : historyTurns,
             modelID: selectedModelID,
             workspaceRoot: project?.rootURL ?? URL.documentsDirectory,
             projectID: project?.id,

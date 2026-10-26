@@ -43,7 +43,11 @@ public struct AssistTreeViewTool: AssistTool {
         var truncated = false
         let tree = generateTree(at: rootURL, depth: 0, maxDepth: maxDepth, visited: &visited, entryCount: &entryCount, truncated: &truncated)
         let suffix = truncated ? "\n… [truncated at 2000 entries]" : ""
-        return .success("Project Tree generated", data: [
+        let output = """
+        Project Tree for \(rootURL.lastPathComponent):
+        \(tree)\(suffix)
+        """
+        return .success(output, data: [
             "tree": tree + suffix,
             "path": rootURL.path,
             "entries": "\(entryCount)",

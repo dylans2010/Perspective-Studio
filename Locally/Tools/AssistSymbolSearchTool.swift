@@ -49,6 +49,16 @@ public struct AssistSymbolSearchTool: AssistTool {
         }
 
         let deduped = Array(Set(allMatches)).sorted()
-        return .success("Symbol search completed for '\(symbol)'", data: ["results": deduped.joined(separator: "\n")])
+        let matchText = deduped.joined(separator: "\n")
+        let output: String
+        if deduped.isEmpty {
+            output = "Symbol search completed for '\(symbol)': No matches found."
+        } else {
+            output = """
+            Symbol search results for '\(symbol)':
+            \(matchText)
+            """
+        }
+        return .success(output, data: ["results": matchText])
     }
 }

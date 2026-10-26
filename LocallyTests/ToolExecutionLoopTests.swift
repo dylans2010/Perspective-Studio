@@ -228,7 +228,7 @@ final class ToolExecutionLoopTests: XCTestCase {
         switch AntigravityLoopEngine.decide(turnText: block, catalog: catalog) {
         case .finalAnswer:
             break
-        case .callTool, .invalidToolCall:
+        case .callTool, .callTools, .invalidToolCall:
             XCTFail("a fenced JSON example must never be parsed as a call")
         }
     }
@@ -261,7 +261,7 @@ final class ToolExecutionLoopTests: XCTestCase {
         ) {
         case .invalidToolCall:
             break
-        case .callTool, .finalAnswer:
+        case .callTool, .callTools, .finalAnswer:
             XCTFail("an unregistered id must never classify as a call")
         }
     }
@@ -270,7 +270,7 @@ final class ToolExecutionLoopTests: XCTestCase {
         switch AntigravityLoopEngine.decide(turnText: "TOOL_CALL {\"tool\": \"calculator\"", catalog: catalog) {
         case .invalidToolCall(_, let rejection):
             XCTAssertEqual(rejection, .malformedCall)
-        case .finalAnswer, .callTool:
+        case .finalAnswer, .callTool, .callTools:
             XCTFail("an unreadable invocation must not become a message")
         }
     }

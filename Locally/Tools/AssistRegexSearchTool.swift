@@ -32,7 +32,17 @@ public struct AssistRegexSearchTool: AssistTool {
                 let rel = AssistToolingSupport.relativePath(for: url, workspaceRoot: context.workspaceRoot)
                 return matches.map { "\(rel):\($0)" }
             }
-            return .success("Regex search completed for '\(pattern)'", data: ["results": lines.joined(separator: "\n")])
+            let matchText = lines.joined(separator: "\n")
+            let output: String
+            if lines.isEmpty {
+                output = "Regex search completed for '\(pattern)': No matches found."
+            } else {
+                output = """
+                Regex search results for '\(pattern)':
+                \(matchText)
+                """
+            }
+            return .success(output, data: ["results": matchText])
         } catch {
             return .failure("Regex search failed: \(error.localizedDescription)")
         }

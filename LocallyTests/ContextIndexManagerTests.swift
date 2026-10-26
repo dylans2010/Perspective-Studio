@@ -161,7 +161,7 @@ final class ContextIndexManagerTests: XCTestCase {
     func testRetrievalRanksGitToolTopAndReturnsOnlyMatches() {
         let entries = makeIndex(
             mode: .agent,
-            tools: [CalculatorAssistTool(), GitHistoryFixtureTool(), AssistReadFileTool()]
+            tools: [CalculatorAssistTool(), GitHistoryFixtureTool(), DateTimeAssistTool()]
         )
         let results = ContextIndexManager.search(entries: entries, query: "git commit history", kind: .tool, limit: 5)
         XCTAssertEqual(results.first?.id, "tool:git_history")
@@ -171,9 +171,9 @@ final class ContextIndexManagerTests: XCTestCase {
         )
         XCTAssertTrue(bundle.contains("git_history"))
         XCTAssertTrue(bundle.contains("Git History"))
-        // Only matched entries: the calculator's schema is not along for the ride.
+        // Only matched entries: the calculator and date_time schemas are not along for the ride.
         XCTAssertFalse(bundle.contains("`calculator`"))
-        XCTAssertFalse(bundle.contains("`file_read`"))
+        XCTAssertFalse(bundle.contains("`date_time`"))
     }
 
     func testAgentBundleAlwaysIncludesCoreTools() {
@@ -350,11 +350,17 @@ final class ContextIndexManagerTests: XCTestCase {
         let payloadTokens = Set(ContextIndexManager.tokenize(entry.payload))
         var lexical = 0
         var payloadHits = 0
+        let isFileTool = entry.kind == .tool && ContextIndexManager.inspectionFileToolIDs.contains(entry.id)
         for token in queryTokens {
             if titleTokens.contains(token) { lexical += 10 }
             if keywordTokens.contains(token) { lexical += 6 }
             if descriptionTokens.contains(token) { lexical += 3 }
             if payloadTokens.contains(token) { payloadHits += 1 }
+            if isFileTool {
+                if ContextIndexManager.inspectionVerbs.contains(token) || ContextIndexManager.matchesFilenameExtension(token) {
+                    lexical += 6
+                }
+            }
         }
         lexical += min(payloadHits, 5)
         var total = lexical
@@ -396,6 +402,44 @@ final class ContextIndexManagerTests: XCTestCase {
         let git = entries.first { $0.id == "tool:git_history" }
         XCTAssertEqual(git?.preparedTokens.title, Set(ContextIndexManager.tokenize("Git History")))
         XCTAssertTrue(git?.preparedTokens.payload.contains("path") ?? false)
+    }
+
+    func testCoreToolIDsIncludesEssentialTools() {
+        let expected: Set<String> = [
+            "context_index_search", "system_asset_lookup", "file_read", "file_search",
+            "dir_read", "search_text", "tree_view", "file_create"
+        ]
+        XCTAssertTrue(expected.isSubset(of: ContextIndexManager.coreToolIDs))
+    }
+
+    func testFileToolsMatchInspectionVerbsAndFilenameExtensions() {
+        let entries = makeIndex(
+            mode: .agent,
+            tools: [
+                AssistReadFileTool(),
+                FileSearchAssistTool(),
+                AssistReadDirectoryTool(),
+                CalculatorAssistTool()
+            ]
+        )
+
+        let inspectionQueries = [
+            "inspect AppDelegate.swift",
+            "examine project directory",
+            "check the config.json",
+            "view README.md"
+        ]
+
+        for query in inspectionQueries {
+            let tokens = ContextIndexManager.tokenize(query)
+            let readTool = entries.first { $0.id == "tool:file_read" }!
+            let searchTool = entries.first { $0.id == "tool:file_search" }!
+            let dirTool = entries.first { $0.id == "tool:dir_read" }!
+
+            XCTAssertTrue(ContextIndexManager.isRelevant(entry: readTool, queryTokens: tokens), "file_read should be relevant for '\(query)'")
+            XCTAssertTrue(ContextIndexManager.isRelevant(entry: searchTool, queryTokens: tokens), "file_search should be relevant for '\(query)'")
+            XCTAssertTrue(ContextIndexManager.isRelevant(entry: dirTool, queryTokens: tokens), "dir_read should be relevant for '\(query)'")
+        }
     }
 
     // MARK: - Index cache

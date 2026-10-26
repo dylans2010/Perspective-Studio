@@ -91,6 +91,56 @@ final class ConversationQualityTests: XCTestCase {
         XCTAssertEqual(ConversationRouter.intent(for: "how much memory does my Mac have"), .task)
     }
 
+    func testPoliteImperativesAndContinuationsRouteToTask() {
+        // Polite imperative prefixes followed by a task verb
+        XCTAssertEqual(ConversationRouter.intent(for: "can you inspect the codebase"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "could you investigate this error"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "please examine the diff"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "would you explore this folder"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "will you audit the security"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "help me diagnose this crash"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "i need you to do the build"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "i want you to compile the project"), .task)
+
+        // Action continuation phrases
+        XCTAssertEqual(ConversationRouter.intent(for: "do it"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "do that"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "do it then"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "proceed"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "go ahead"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "execute it"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "ok, go ahead"), .task)
+    }
+
+    func testFileExtensionsAndPathsRouteToTask() {
+        // Direct file extensions
+        XCTAssertEqual(ConversationRouter.intent(for: "read ConversationRouter.swift"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "inspect script.py"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "check index.js"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "examine app.ts"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "audit package.json"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "review README.md"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "show notes.txt"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "check index.html"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "update style.css"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "read config.yml"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "check config.yaml"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "inspect layout.xml"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "compile main.c"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "compile main.cpp"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "read header.h"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "inspect bridge.m"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "test lib.rs"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "run server.go"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "run build.sh"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "inspect Gemfile.rb"), .task)
+
+        // Paths with /
+        XCTAssertEqual(ConversationRouter.intent(for: "inspect Locally/Services/ConversationRouter.swift"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "check src/index.js"), .task)
+        XCTAssertEqual(ConversationRouter.intent(for: "read /var/log/system.log"), .task)
+    }
+
     // MARK: - B. Retrieval gating
 
     func testGreetingBundleContainsOnlyStandingInstructions() {
@@ -273,13 +323,13 @@ final class ConversationQualityTests: XCTestCase {
         switch AntigravityLoopEngine.decide(turnText: "Hey! What can I help you with?", knownToolIDs: ["calculator"]) {
         case .finalAnswer(let answer):
             XCTAssertEqual(answer, "Hey! What can I help you with?")
-        case .callTool, .invalidToolCall:
+        case .callTool, .callTools, .invalidToolCall:
             XCTFail("a plain greeting reply must classify as a final answer")
         }
         switch AntigravityLoopEngine.decide(turnText: "TOOL_CALL {\"tool\": \"calculator\", \"arguments\": {}}", knownToolIDs: ["calculator"]) {
         case .callTool(let toolID, _):
             XCTAssertEqual(toolID, "calculator")
-        case .finalAnswer, .invalidToolCall:
+        case .finalAnswer, .callTools, .invalidToolCall:
             XCTFail("a genuine tool call must still classify as a tool call — multi-step tasks keep working")
         }
     }

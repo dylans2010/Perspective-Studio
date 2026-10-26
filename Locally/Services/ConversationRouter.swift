@@ -47,14 +47,14 @@ public nonisolated enum ConversationRouter {
     public static func intent(for message: String) -> ConversationIntent {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .direct }
-        // Identity / purpose / capability questions are `.direct`, never
-        // conversational and never a task: they need the authoritative
-        // identity instructions retrieved and a real (brief) answer —
-        // "who are you" used to match the small-talk set and skip
-        // retrieval entirely, and none of them may start a tool loop.
-        if ContextIndexManager.isIdentityQuery(trimmed) && !hasTaskSignal(trimmed) { return .direct }
-        if matchesConversationalPattern(trimmed) { return .conversational }
+        // Any task signal routes directly to .task for tool access
         if hasTaskSignal(trimmed) { return .task }
+        // Identity / purpose / capability questions are `.direct`:
+        // they need authoritative identity instructions retrieved and a real
+        // (brief) answer without conversational dismissal or starting tool loops.
+        if ContextIndexManager.isIdentityQuery(trimmed) { return .direct }
+        // Strict whole-message small talk / greetings return .conversational
+        if matchesConversationalPattern(trimmed) { return .conversational }
         return .direct
     }
 
@@ -168,6 +168,29 @@ public nonisolated enum ConversationRouter {
 
     // MARK: - Task signals
 
+    /// Action continuation phrases that indicate permission or instruction to proceed with prior tasks.
+    private static let actionContinuationPhrases: [String] = [
+        "do it", "do that", "do it then", "proceed", "go ahead", "execute it"
+    ]
+
+    /// Target file extensions recognized as work objects.
+    private static let targetFileExtensions: Set<String> = [
+        "swift", "py", "js", "ts", "json", "md", "txt", "html", "css",
+        "yml", "yaml", "xml", "c", "cpp", "h", "m", "rs", "go", "sh", "rb"
+    ]
+
+    /// Polite imperative prefixes that, when followed by a task verb, indicate a task turn.
+    private static let politeImperativePrefixes: [[String]] = [
+        ["can", "you"],
+        ["could", "you"],
+        ["please"],
+        ["would", "you"],
+        ["will", "you"],
+        ["help", "me"],
+        ["i", "need", "you", "to"],
+        ["i", "want", "you", "to"]
+    ]
+
     /// Strong signals that a turn genuinely needs tools / inspection /
     /// execution. Deliberately verb- and object-based, not a keyword dump:
     /// a bare topic phrase ("banana smoothie recipe") is `.direct`.
@@ -176,6 +199,9 @@ public nonisolated enum ConversationRouter {
         guard !text.isEmpty else { return false }
         let words = text.components(separatedBy: " ")
         let wordSet = Set(words)
+
+        // 1. Action continuation phrases ("do it", "do that", "proceed", "go ahead", etc.)
+        if matchesActionContinuation(text) { return true }
 
         // Imperative / task verbs anywhere in the message. These are
         // verbs whose presence means the user asked for work to be done,
@@ -189,8 +215,17 @@ public nonisolated enum ConversationRouter {
             "show", "check", "test", "deploy", "commit", "push", "merge",
             "generate", "convert", "export", "import", "calculate",
             "compute", "analyze", "analyse", "summarize", "summarise",
-            "screenshot", "click", "type", "browse", "fetch", "scan"
+            "screenshot", "click", "type", "browse", "fetch", "scan",
+            "do", "investigate", "examine", "explore", "diagnose"
         ]
+
+        // 2. Polite imperative prefix followed by a task verb:
+        // "can you", "could you", "please", "would you", "will you",
+        // "help me", "i need you to", "i want you to"
+        if hasPoliteImperative(words: words, taskVerbs: taskVerbs) {
+            return true
+        }
+
         // Object-ish nouns that turn a question into an inspection task
         // when combined with a question/interrogative frame.
         let workObjects: Set<String> = [
@@ -200,7 +235,8 @@ public nonisolated enum ConversationRouter {
             "server", "database", "spreadsheet", "document", "email"
         ]
         let hasVerb = !wordSet.isDisjoint(with: taskVerbs)
-        let hasWorkObject = !wordSet.isDisjoint(with: workObjects)
+        let hasFileOrPath = hasFileOrPathReference(message, normalizedWords: words)
+        let hasWorkObject = !wordSet.isDisjoint(with: workObjects) || hasFileOrPath
 
         // Imperative form: the message *starts* with a task verb
         // ("fix the layout", "search for memory leaks", "check my email").
@@ -219,6 +255,88 @@ public nonisolated enum ConversationRouter {
         if text.contains("my mac") || text.contains("this mac") || text.contains("on my computer") {
             return true
         }
+        return false
+    }
+
+    private static func matchesActionContinuation(_ text: String) -> Bool {
+        let padded = " " + text + " "
+        for phrase in actionContinuationPhrases {
+            if padded.contains(" " + phrase + " ") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func hasPoliteImperative(words: [String], taskVerbs: Set<String>) -> Bool {
+        guard !words.isEmpty else { return false }
+        for prefix in politeImperativePrefixes {
+            let pLen = prefix.count
+            guard words.count > pLen else { continue }
+            for i in 0...(words.count - pLen) {
+                if Array(words[i..<(i + pLen)]) == prefix {
+                    let trailingWords = words[(i + pLen)...]
+                    if trailingWords.contains(where: { taskVerbs.contains($0) }) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private static func hasFileOrPathReference(_ message: String, normalizedWords: [String]) -> Bool {
+        // 1. Raw message token detection (preserves . and /)
+        let rawTokens = message.components(separatedBy: .whitespacesAndNewlines)
+        for token in rawTokens {
+            let trimmed = token.trimmingCharacters(in: CharacterSet(charactersIn: "()[]{}><\"'!?.,;:"))
+            guard !trimmed.isEmpty else { continue }
+
+            let tokenWithoutLineNumber = trimmed.components(separatedBy: ":").first ?? trimmed
+
+            if let dotIndex = tokenWithoutLineNumber.lastIndex(of: ".") {
+                let ext = String(tokenWithoutLineNumber[tokenWithoutLineNumber.index(after: dotIndex)...]).lowercased()
+                if targetFileExtensions.contains(ext) {
+                    return true
+                }
+            }
+
+            if trimmed.contains("/") {
+                let lower = trimmed.lowercased()
+                if !lower.hasPrefix("http://") && !lower.hasPrefix("https://")
+                    && lower != "and/or" && lower != "either/or" && lower != "w/o" && lower != "n/a" {
+                    let isDate = trimmed.allSatisfy { $0.isNumber || $0 == "/" }
+                    if !isDate {
+                        return true
+                    }
+                }
+            }
+        }
+
+        // 2. Normalized words detection (handles stripped periods / collapsed tokens)
+        let unambiguousSuffixExtensions = ["swift", "json", "yaml", "yml", "html", "css", "cpp", "txt", "xml"]
+        for word in normalizedWords {
+            for ext in unambiguousSuffixExtensions {
+                if word.hasSuffix(ext) && word.count > ext.count {
+                    return true
+                }
+            }
+        }
+
+        for i in 1..<normalizedWords.count {
+            let current = normalizedWords[i]
+            if targetFileExtensions.contains(current) {
+                let prev = normalizedWords[i - 1]
+                let nonIdentifierWords: Set<String> = [
+                    "a", "an", "the", "in", "on", "at", "to", "for", "of", "with", "by", "from",
+                    "and", "or", "is", "are", "was", "were", "be", "been", "write", "learn", "teach"
+                ]
+                if !nonIdentifierWords.contains(prev) && prev.count >= 2 {
+                    return true
+                }
+            }
+        }
+
         return false
     }
 }

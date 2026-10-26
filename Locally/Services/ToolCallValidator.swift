@@ -212,6 +212,49 @@ public enum ToolCallValidation: Sendable, Equatable {
 /// printing a command in a code block, never reaches an implementation.
 public enum ToolCallValidator {
 
+    /// Normalizes common argument aliases for core tools before schema validation.
+    public nonisolated static func normalizeArgumentAliases(
+        toolID: String,
+        arguments: [String: AnyCodableValue]
+    ) -> [String: AnyCodableValue] {
+        var normalized = arguments
+        let canonicalID = toolID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        switch canonicalID {
+        case "file_read":
+            if normalized["path"] == nil {
+                if let aliasVal = normalized["filePath"] ?? normalized["file_path"] ?? normalized["file"] ?? normalized["targetFile"] {
+                    normalized["path"] = aliasVal
+                }
+            }
+            normalized.removeValue(forKey: "filePath")
+            normalized.removeValue(forKey: "file_path")
+            normalized.removeValue(forKey: "file")
+            normalized.removeValue(forKey: "targetFile")
+
+        case "file_search":
+            if normalized["query"] == nil {
+                if let aliasVal = normalized["pattern"] {
+                    normalized["query"] = aliasVal
+                }
+            }
+            normalized.removeValue(forKey: "pattern")
+
+        case "file_write", "file_create":
+            if normalized["content"] == nil {
+                if let aliasVal = normalized["text"] {
+                    normalized["content"] = aliasVal
+                }
+            }
+            normalized.removeValue(forKey: "text")
+
+        default:
+            break
+        }
+
+        return normalized
+    }
+
     public nonisolated static func validate(
         toolID: String,
         arguments: [String: AnyCodableValue],
@@ -221,14 +264,16 @@ public enum ToolCallValidator {
             return .rejected(.unknownTool(toolID.trimmingCharacters(in: .whitespacesAndNewlines)))
         }
 
-        if let rejection = validateArguments(arguments, against: contract) {
+        let normalizedArgs = normalizeArgumentAliases(toolID: contract.id, arguments: arguments)
+
+        if let rejection = validateArguments(normalizedArgs, against: contract) {
             return .rejected(rejection)
         }
 
         return .accepted(ValidatedToolCall(
             toolID: contract.id,
             toolName: contract.name,
-            arguments: arguments
+            arguments: normalizedArgs
         ))
     }
 

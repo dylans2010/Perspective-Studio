@@ -28,6 +28,10 @@ public enum AntigravityLoopEngine {
         /// against the registry. The invocation itself is private plumbing and
         /// is consumed by the loop, never displayed.
         case callTool(toolID: String, arguments: [String: AnyCodableValue])
+        /// The model asked to run multiple tools in a single turn. They
+        /// are executed sequentially by the harness and their observations
+        /// are fed back together into the loop.
+        case callTools([(toolID: String, arguments: [String: AnyCodableValue])])
         /// The model asked for an action that cannot run: an unregistered
         /// tool, unreadable payload, or arguments its schema rejects. Nothing
         /// is executed; the loop feeds the reason back so the model can
@@ -41,7 +45,7 @@ public enum AntigravityLoopEngine {
         /// turns use this to escalate into the loop.
         public var isToolAttempt: Bool {
             switch self {
-            case .callTool, .invalidToolCall: true
+            case .callTool, .callTools, .invalidToolCall: true
             case .finalAnswer: false
             }
         }
@@ -50,6 +54,12 @@ public enum AntigravityLoopEngine {
             switch (lhs, rhs) {
             case (.callTool(let aID, let aArgs), .callTool(let bID, let bArgs)):
                 return aID == bID && aArgs == bArgs
+            case (.callTools(let aList), .callTools(let bList)):
+                guard aList.count == bList.count else { return false }
+                for (a, b) in zip(aList, bList) {
+                    if a.toolID != b.toolID || a.arguments != b.arguments { return false }
+                }
+                return true
             case (.invalidToolCall(let aID, let aRejection), .invalidToolCall(let bID, let bRejection)):
                 return aID == bID && aRejection == bRejection
             case (.finalAnswer(let a), .finalAnswer(let b)):
@@ -72,13 +82,22 @@ public enum AntigravityLoopEngine {
     /// A tool turn's prose is discarded by the loop: half-formed explanations
     /// of plumbing are how raw invocations used to leak into the chat.
     public nonisolated static func decide(turnText: String, catalog: ToolCatalog) -> TurnDecision {
-        if let parsed = AntigravityAgentHarness.parseToolCall(in: turnText) {
-            let args = parsed.arguments.mapValues { AnyCodableValue(any: $0) }
-            switch ToolCallValidator.validate(toolID: parsed.toolId, arguments: args, catalog: catalog) {
-            case .accepted(let call):
-                return .callTool(toolID: call.toolID, arguments: call.arguments)
-            case .rejected(let rejection):
-                return .invalidToolCall(toolID: parsed.toolId, rejection: rejection)
+        let calls = AntigravityAgentHarness.parseToolCalls(in: turnText)
+        if !calls.isEmpty {
+            var validCalls: [(toolID: String, arguments: [String: AnyCodableValue])] = []
+            for parsed in calls {
+                let args = parsed.arguments.mapValues { AnyCodableValue(any: $0) }
+                switch ToolCallValidator.validate(toolID: parsed.toolId, arguments: args, catalog: catalog) {
+                case .accepted(let call):
+                    validCalls.append((toolID: call.toolID, arguments: call.arguments))
+                case .rejected(let rejection):
+                    return .invalidToolCall(toolID: parsed.toolId, rejection: rejection)
+                }
+            }
+            if validCalls.count == 1 {
+                return .callTool(toolID: validCalls[0].toolID, arguments: validCalls[0].arguments)
+            } else if validCalls.count > 1 {
+                return .callTools(validCalls)
             }
         }
         // The model used the tool-call channel but the payload could not be
@@ -112,6 +131,26 @@ public enum AntigravityLoopEngine {
         """
     }
 
+    /// The user-turn text that feeds multiple tool results from a single turn back into the loop.
+    public nonisolated static func multiObservationPrompt(results: [(toolID: String, output: String, success: Bool)]) -> String {
+        var blocks: [String] = []
+        for r in results {
+            let statusLine = r.success
+                ? ""
+                : "This action FAILED — it is an error result, not an observation. Do not describe it as done; report the failure in plain language and choose a different next step.\n"
+            blocks.append("""
+            Tool result (from \(ToolNameFormatter.format(r.toolID))):
+            \(statusLine)\(r.output)
+            """)
+        }
+        let joined = blocks.joined(separator: "\n\n")
+        return """
+        \(joined)
+
+        Analyze these results and proceed to the next step, or provide the final answer if the task is complete. Remember: never mention tool names, ids, or invocation syntax in your answer — describe actions and findings in plain language.
+        """
+    }
+
     /// The user turn fed back when the model requested an action that cannot
     /// run. It states the rule and the specific defect, and pushes the model
     /// to either make one corrected call or say the capability is missing.
@@ -126,10 +165,11 @@ public enum AntigravityLoopEngine {
         """
     }
 
-    /// The user turn fed back when the model *describes* work instead of doing
-    /// it (the "I will run it now" turn with no call attached).
+    /// The user turn fed back when the model *describes* work or asserts capability
+    /// instead of doing it (the "I can read the files..." or "I will run it now" turn
+    /// with no call attached).
     public nonisolated static let narrationCorrectionPrompt = """
-    You described an action but did not request one, so nothing ran. Your last reply was not a result.
+    You described an action or stated a capability but did not request one, so nothing ran. You must NOT merely state that you can read, search, or inspect files — you MUST emit a TOOL_CALL now.
 
     Either request the action now as exactly one line — TOOL_CALL {"tool": "<registered id>", "arguments": { ... }} — or, if this runtime has no tool that can do it, tell the user truthfully that it cannot be done here and stop. Never state or imply that an action happened when no tool ran.
     """
@@ -170,6 +210,18 @@ public enum AntigravityLoopEngine {
         "running the command", "attaching the debugger"
     ]
 
+    /// First-person capability statements and action narration: asserting
+    /// the ability or intent to inspect, read, check, search, or access
+    /// code/files without actually emitting a tool call.
+    private nonisolated static let capabilityStatements: [String] = [
+        "i can read", "i can inspect", "i can check", "i can search", "i can access",
+        "i am able to read", "i will look for", "i'll look for", "let me look for",
+        "i will inspect", "i'll inspect", "let me inspect", "let me check", "i'll check",
+        "i can check", "i will check", "i'll read", "i will read", "let me read",
+        "i'll search", "i will search", "let me search", "i'll find", "i will find",
+        "let me find"
+    ]
+
     /// Words that make an announcement an announcement of *work* (running,
     /// attaching, invoking a tool) rather than ordinary first-person prose.
     private nonisolated static let pendingActionMarkers: [String] = [
@@ -177,19 +229,44 @@ public enum AntigravityLoopEngine {
         "run ", "runs", "execute", "launch", "bash", "script", "build", "xcodebuild"
     ]
 
+    /// File and inspection keywords: when present alongside a pending action,
+    /// the turn is an unexecuted file/code action even without shell/command markers.
+    private nonisolated static let fileOrCodeKeywords: [String] = [
+        "file", "files", "code", "directory", "folder", "workspace", "repo", "repository", "project"
+    ]
+
+    private nonisolated static let inspectionKeywords: [String] = [
+        "read", "reading", "search", "searching", "inspect", "inspecting", "look for", "looking for", "find", "check"
+    ]
+
     /// True when the text announces work the model is about to do rather than
     /// reporting work that was done. Used by the loop to refuse an
     /// announcement as a final answer: an announced action that was never
     /// requested through the tool channel is not a completed task.
     ///
-    /// Deliberately narrow: a first-person future phrase *and* an action marker
-    /// (a fenced block, or a command/execution word). "I will now summarize the
-    /// findings" is an answer, not an announcement of pending work.
+    /// Catches explicit capability statements ("I can read the files..."),
+    /// action narrations ("Let me search for..."), and future-work phrases.
     public nonisolated static func describesPendingAction(_ text: String) -> Bool {
         let lowered = text.lowercased()
+
+        // 1. Direct match on capability statements and action narration:
+        if capabilityStatements.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+
+        // 2. Pending action phrases with command markers, code blocks, or file/code inspection intent:
         guard pendingActionPhrases.contains(where: { lowered.contains($0) }) else { return false }
         if text.contains("```") { return true }
-        return pendingActionMarkers.contains { lowered.contains($0) }
+        if pendingActionMarkers.contains(where: { lowered.contains($0) }) { return true }
+
+        // Do not require pendingActionMarkers if the phrase explicitly mentions reading, searching, inspecting, or looking for files/code!
+        let mentionsFileOrCode = fileOrCodeKeywords.contains { lowered.contains($0) }
+        let mentionsInspection = inspectionKeywords.contains { lowered.contains($0) }
+        if mentionsFileOrCode && mentionsInspection {
+            return true
+        }
+
+        return false
     }
 
     /// A narration signature for no-progress detection: the same announcement

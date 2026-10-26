@@ -43,8 +43,13 @@ public struct AssistReadDirectoryTool: AssistTool {
                 }
                 annotated.append(existsAsDir ? entry + "/" : entry)
             }
+            let listing = annotated.isEmpty ? "(directory is empty)" : annotated.joined(separator: "\n")
+            let output = """
+            Directory \(path) (\(contents.count) entries):
+            \(listing)
+            """
             return .success(
-                "Successfully read directory: \(path) (\(contents.count) entries)",
+                output,
                 data: [
                     "contents": annotated.joined(separator: "\n"),
                     "count": "\(contents.count)",

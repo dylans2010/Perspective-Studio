@@ -387,4 +387,167 @@ extension ToolCallingPipelineRepairTests {
             return XCTFail("prose must not enter the tool dispatcher")
         }
     }
+
+    // MARK: - Expanded Capability & Action Narration Detection
+
+    func testCapabilityStatementsAreDetectedAsPendingActions() {
+        let phrases = [
+            "I can read the file for you.",
+            "I can inspect the source code now.",
+            "I can check the directory structure.",
+            "I can search the workspace.",
+            "I can access the project files.",
+            "I am able to read the contents.",
+            "I will look for where this function is defined.",
+            "I'll look for the class implementation.",
+            "Let me look for the file.",
+            "I will inspect the implementation details.",
+            "I'll inspect the code.",
+            "Let me inspect the model.",
+            "Let me check the repository.",
+            "I'll check the source.",
+            "I can check the files.",
+            "I will check the configuration.",
+            "I'll read the code now.",
+            "I will read the App.swift file.",
+            "Let me read the file.",
+            "I'll search for the symbol.",
+            "I will search the codebase.",
+            "Let me search the files.",
+            "I'll find the method.",
+            "I will find where that is defined.",
+            "Let me find the declaration."
+        ]
+
+        for phrase in phrases {
+            XCTAssertTrue(AntigravityLoopEngine.describesPendingAction(phrase), "Expected '\(phrase)' to be recognized as a pending action.")
+        }
+
+        // Non-action prose should not trigger
+        XCTAssertFalse(AntigravityLoopEngine.describesPendingAction("I will now summarize the findings."))
+        XCTAssertFalse(AntigravityLoopEngine.describesPendingAction("Let me know if you need anything else."))
+    }
+
+    // MARK: - Robust Tool Call Parsing
+
+    func testRobustToolCallParsingFormats() {
+        // TOOL_CALL: with colon
+        let withColon = "TOOL_CALL: {\"tool\": \"calculator\", \"arguments\": {\"expression\": \"3+3\"}}"
+        XCTAssertEqual(AntigravityAgentHarness.parseToolCall(in: withColon)?.toolId, "calculator")
+
+        // TOOL_CALL\n{...} newline
+        let withNewline = "TOOL_CALL\n{\"tool\": \"calculator\", \"arguments\": {\"expression\": \"4+4\"}}"
+        XCTAssertEqual(AntigravityAgentHarness.parseToolCall(in: withNewline)?.toolId, "calculator")
+
+        // Fenced code block with TOOL_CALL
+        let fencedToolCall = """
+        ```json
+        TOOL_CALL {"tool": "file_read", "arguments": {"path": "main.swift"}}
+        ```
+        """
+        XCTAssertEqual(AntigravityAgentHarness.parseToolCall(in: fencedToolCall)?.toolId, "file_read")
+
+        // Fenced code block with bare tool JSON
+        let fencedJSON = """
+        ```json
+        {"tool": "file_read", "arguments": {"path": "App.swift"}}
+        ```
+        """
+        XCTAssertEqual(AntigravityAgentHarness.parseToolCall(in: fencedJSON)?.toolId, "file_read")
+
+        // <function=file_read> tag
+        let functionTag = "<function=file_read>{\"path\": \"Config.swift\"}</function>"
+        let parsedFunc = AntigravityAgentHarness.parseToolCall(in: functionTag)
+        XCTAssertEqual(parsedFunc?.toolId, "file_read")
+        XCTAssertEqual(parsedFunc?.arguments["path"] as? String, "Config.swift")
+
+        // Multiple tool calls in a single turn
+        let multiCallText = """
+        TOOL_CALL {"tool": "file_read", "arguments": {"path": "A.swift"}}
+        TOOL_CALL {"tool": "file_read", "arguments": {"path": "B.swift"}}
+        """
+        let calls = AntigravityAgentHarness.parseToolCalls(in: multiCallText)
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(calls[0].toolId, "file_read")
+        XCTAssertEqual(calls[0].arguments["path"] as? String, "A.swift")
+        XCTAssertEqual(calls[1].toolId, "file_read")
+        XCTAssertEqual(calls[1].arguments["path"] as? String, "B.swift")
+    }
+
+    // MARK: - Tool Argument Aliases
+
+    func testToolArgumentAliasesNormalizeCorrectly() {
+        let catalog = ToolCatalog(tools: [
+            AssistReadFileTool(),
+            FileSearchAssistTool(),
+            AssistCreateFileTool(),
+            AssistWriteFileTool()
+        ])
+
+        // file_read aliases: filePath, file_path, file, targetFile -> path
+        for alias in ["filePath", "file_path", "file", "targetFile"] {
+            let res = ToolCallValidator.validate(
+                toolID: "file_read",
+                arguments: [alias: .string("Sources/Main.swift")],
+                catalog: catalog
+            )
+            guard case .accepted(let call) = res else {
+                return XCTFail("file_read with alias '\(alias)' should be accepted")
+            }
+            XCTAssertEqual(call.arguments["path"], .string("Sources/Main.swift"))
+        }
+
+        // file_search alias: pattern -> query
+        let searchRes = ToolCallValidator.validate(
+            toolID: "file_search",
+            arguments: ["pattern": .string("struct ContentView")],
+            catalog: catalog
+        )
+        guard case .accepted(let searchCall) = searchRes else {
+            return XCTFail("file_search with alias 'pattern' should be accepted")
+        }
+        XCTAssertEqual(searchCall.arguments["query"], .string("struct ContentView"))
+
+        // file_create alias: text -> content
+        let createRes = ToolCallValidator.validate(
+            toolID: "file_create",
+            arguments: ["path": .string("test.txt"), "text": .string("hello")],
+            catalog: catalog
+        )
+        guard case .accepted(let createCall) = createRes else {
+            return XCTFail("file_create with alias 'text' should be accepted")
+        }
+        XCTAssertEqual(createCall.arguments["content"], .string("hello"))
+
+        // file_write alias: text -> content
+        let writeRes = ToolCallValidator.validate(
+            toolID: "file_write",
+            arguments: ["path": .string("test.txt"), "text": .string("world")],
+            catalog: catalog
+        )
+        guard case .accepted(let writeCall) = writeRes else {
+            return XCTFail("file_write with alias 'text' should be accepted")
+        }
+        XCTAssertEqual(writeCall.arguments["content"], .string("world"))
+    }
+
+    // MARK: - Foundation Model Tool IDs
+
+    @available(macOS 26.0, *)
+    func testFoundationModelRunnerIncludesCoreFileTools() {
+        let required = ["file_search", "file_read", "dir_read", "search_text", "tree_view", "file_create", "file_write"]
+        for tool in required {
+            XCTAssertTrue(FoundationModelAgentRunner.offeredToolIDs.contains(tool), "offeredToolIDs must include \(tool)")
+        }
+
+        let selected = FoundationModelAgentRunner.selectToolIDs(
+            query: "hello",
+            toolEntries: [],
+            projectActive: false,
+            computerUseEnabled: false
+        )
+        XCTAssertTrue(selected.contains("file_read"))
+        XCTAssertTrue(selected.contains("file_search"))
+        XCTAssertTrue(selected.contains("dir_read"))
+    }
 }

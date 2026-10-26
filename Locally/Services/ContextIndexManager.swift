@@ -164,7 +164,34 @@ public enum ContextIndexManager {
     /// Total estimated tokens one `context_index_search` result may occupy.
     public static let searchResultTokenBudget = 2_500
     /// Tool ids that are always in the Agent tool bundle when present.
-    public static let coreToolIDs: Set<String> = ["context_index_search", "system_asset_lookup"]
+    public static let coreToolIDs: Set<String> = [
+        "context_index_search", "system_asset_lookup", "file_read", "file_search",
+        "dir_read", "search_text", "tree_view", "file_create"
+    ]
+
+    public static let inspectionFileToolIDs: Set<String> = [
+        "file_read", "file_search", "dir_read",
+        "tool:file_read", "tool:file_search", "tool:dir_read"
+    ]
+
+    public static let inspectionVerbs: Set<String> = [
+        "inspect", "examine", "check", "view"
+    ]
+
+    public static let filenameExtensions: Set<String> = [
+        "swift", "json", "txt", "text", "md", "markdown", "py", "js", "ts", "jsx", "tsx",
+        "html", "css", "scss", "xml", "yaml", "yml", "toml", "plist", "c", "h", "m",
+        "cpp", "hpp", "sh", "bash", "zsh", "sql", "rb", "rs", "go", "java", "kt",
+        "strings", "xcstrings", "xcodeproj", "xcworkspace", "csv", "log"
+    ]
+
+    public static func matchesFilenameExtension(_ token: String) -> Bool {
+        if filenameExtensions.contains(token) { return true }
+        if let ext = token.split(separator: ".").last.map(String.init), filenameExtensions.contains(ext) {
+            return true
+        }
+        return false
+    }
     /// The authoritative identity asset's id / index-entry id. Identity
     /// questions force-retrieve it (see `isIdentityQuery`): those
     /// questions tokenize to stopwords and single weak tokens, so the
@@ -222,14 +249,16 @@ public enum ContextIndexManager {
         "any", "all", "not", "but", "its", "it"
     ]
 
-    /// Lowercased word tokens of length ≥ 3, stopwords removed, order kept,
+    /// Lowercased word tokens of length ≥ 3 (or known file extensions), stopwords removed, order kept,
     /// duplicates removed. Used for queries and entry text alike.
     public static func tokenize(_ text: String) -> [String] {
         var seen = Set<String>()
         var tokens: [String] = []
         for raw in text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "_" }) {
             let token = String(raw)
-            guard token.count >= 3, !stopwords.contains(token), !seen.contains(token) else { continue }
+            guard (token.count >= 3 || filenameExtensions.contains(token)),
+                  !stopwords.contains(token),
+                  !seen.contains(token) else { continue }
             seen.insert(token)
             tokens.append(token)
         }
@@ -258,11 +287,18 @@ public enum ContextIndexManager {
         var lexical = 0
         var payloadHits = 0
         var strongHit = false
+        let isFileTool = entry.kind == .tool && inspectionFileToolIDs.contains(entry.id)
         for token in queryTokens {
             if prepared.title.contains(token) { lexical += 10; strongHit = true }
             if prepared.keywords.contains(token) { lexical += 6; strongHit = true }
             if prepared.description.contains(token) { lexical += 3; strongHit = true }
             if prepared.payload.contains(token) { payloadHits += 1 }
+            if isFileTool {
+                if inspectionVerbs.contains(token) || matchesFilenameExtension(token) {
+                    lexical += 6
+                    strongHit = true
+                }
+            }
         }
         // Payload evidence is weak and capped, so a long document cannot
         // outrank a title/keyword match just by mentioning everything.

@@ -33,7 +33,16 @@ public struct AssistSearchTool: AssistTool {
                 return "\(relativePath):\n" + matches.joined(separator: "\n")
             }.joined(separator: "\n\n")
 
-            return .success("Search results for '\(pattern)':", data: ["results": formattedResults])
+            let output: String
+            if formattedResults.isEmpty {
+                output = "Search results for '\(pattern)': No matches found."
+            } else {
+                output = """
+                Search results for '\(pattern)':
+                \(formattedResults)
+                """
+            }
+            return .success(output, data: ["results": formattedResults])
         } catch {
             return .failure("Search failed: \(error.localizedDescription)", code: .executionFailed)
         }

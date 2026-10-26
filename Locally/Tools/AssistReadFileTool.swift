@@ -96,7 +96,11 @@ public struct AssistReadFileTool: AssistTool {
                 .map { "\(start + $0.offset): \($0.element)" }
                 .joined(separator: "\n")
             let fullyAvailable = (start == 1 && clampedEnd == totalLines)
-            return .success("Successfully read file: \(path) (lines \(start)-\(clampedEnd) of \(totalLines))", data: [
+            let output = """
+            Successfully read file: \(path) (lines \(start)-\(clampedEnd) of \(totalLines)):
+            \(numbered)
+            """
+            return .success(output, data: [
                 "content": numbered,
                 "path": resolvedPath,
                 "start": "\(start)", "end": "\(clampedEnd)",
