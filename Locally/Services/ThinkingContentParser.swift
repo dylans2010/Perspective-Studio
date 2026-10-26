@@ -27,7 +27,7 @@ enum ThinkingContentParser {
         nonisolated var thinkingText: String { thinkingBlocks.joined(separator: "\n\n") }
     }
 
-    nonisolated(unsafe) private static let tagPairs: [(open: String, close: String)] = [
+    nonisolated private static let tagPairs: [(open: String, close: String)] = [
         ("<thinking>", "</thinking>"),
         ("<think>", "</think>")
     ]

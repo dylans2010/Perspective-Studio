@@ -199,7 +199,7 @@ final class GenerationStabilityTests: XCTestCase {
         // Endless token stream, tiny run budget: the run must end with
         // the timeout as its terminal state, quickly — not when the
         // model decides to stop.
-        let mock = StabilityScriptedBackend(script: [String(repeating: "word ", count: 2_000)], tokenDelay: .milliseconds(5))
+        let mock = StabilityScriptedBackend(script: [String(repeating: "word ", count: 20_000)], tokenDelay: .milliseconds(5))
         let harness = AntigravityAgentHarness()
         let started = Date.now
         let outcome = await harness.run(

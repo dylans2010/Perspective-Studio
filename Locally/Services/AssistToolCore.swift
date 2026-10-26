@@ -434,7 +434,7 @@ public struct AssistToolResult: Codable, Sendable {
         diagnostics: [String] = [],
         suggestedNextActions: [String] = []
     ) -> AssistToolResult {
-        var result = AssistToolResult(
+        return AssistToolResult(
             success: false,
             output: "Error: \(error)",
             error: error,
@@ -442,7 +442,6 @@ public struct AssistToolResult: Codable, Sendable {
             suggestedNextActions: suggestedNextActions,
             toolErrorCode: code
         )
-        return result
     }
 }
 
@@ -1639,7 +1638,7 @@ public final class AssistWorkingDirectoryStore: @unchecked Sendable {
     }
 
     public func remove(for sessionId: UUID) {
-        lock.withLock { directories.removeValue(forKey: sessionId) }
+        lock.withLock { _ = directories.removeValue(forKey: sessionId) }
     }
 }
 

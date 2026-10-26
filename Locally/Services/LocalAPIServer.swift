@@ -340,7 +340,6 @@ final class LocalAPIServerManager {
             }
 
             let systemPrompt = requestPayload.messages.filter { $0.role == "system" }.map { $0.content }.joined(separator: "\n")
-            let promptMessages = requestPayload.messages.map { (role: $0.role, content: $0.content) }
             let lastUserPrompt = requestPayload.messages.last(where: { $0.role == "user" })?.content ?? ""
 
             if isStream {

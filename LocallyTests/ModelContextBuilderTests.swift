@@ -154,6 +154,6 @@ final class ModelContextBuilderTests: XCTestCase {
             ModelContextBuilder.Input(isAgentMode: true, retrievedContext: oversized)
         )
         XCTAssertTrue(agent.contains("truncated to this mode's token budget"))
-        XCTAssertLessThan(agent.count, 1_600 * 4 + 2_800)
+        XCTAssertLessThan(agent.count, ContextIndexManager.agentBundleTokenBudget * 4 + 2_800)
     }
 }

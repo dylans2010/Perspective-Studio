@@ -330,7 +330,7 @@ public struct ExecutionPlanTool: AssistTool {
             verification: "File contents loaded into context"
         ))
 
-        for (idx, file) in relevantFiles.enumerated() {
+        for file in relevantFiles {
             if let content = fileContents[file] {
                 let lines = content.components(separatedBy: "\n").count
                 if lines > 200 {

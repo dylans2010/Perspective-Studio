@@ -334,7 +334,7 @@ actor ModelDownloadService {
                 return
             }
 
-            Task { await self.register(task: task, for: modelID) }
+            Task { self.register(task: task, for: modelID) }
             Task {
                 // Poll progress until the download task leaves the running state.
                 while task.state == .running || task.state == .suspended {
@@ -346,7 +346,7 @@ actor ModelDownloadService {
             task.resume()
         }
 
-        await unregister(modelID: modelID)
+        unregister(modelID: modelID)
         return result
     }
 

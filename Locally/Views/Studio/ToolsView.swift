@@ -176,7 +176,7 @@ struct ToolsView: View {
 
             if let pending = pendingConfirmation {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("The model wants to run “\(pending.toolID)” with \(pending.arguments). Approve?")
+                    Text(verbatim: "The model wants to run “\(pending.toolID)” with \(pending.arguments). Approve?")
                         .font(.callout)
                     HStack {
                         Button("Approve & Run") {
